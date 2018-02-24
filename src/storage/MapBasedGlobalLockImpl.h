@@ -10,6 +10,44 @@
 namespace Afina {
 namespace Backend {
 
+class Entry;
+class List;
+class MapBasedGlobalLockImpl;
+
+class Entry {
+public:
+    Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val);
+    ~Entry(){};
+
+private:
+    friend List;
+    friend MapBasedGlobalLockImpl;
+
+    Entry *_prev = nullptr;
+    Entry *_next = nullptr;
+    const std::string& _key;
+    std::string _val;
+};
+
+
+class List{
+public:
+    List(){};
+    ~List();
+
+    bool Put(const std::string& key, const std::string& value, Entry *& entry);
+
+    bool ToForward(Entry *entry);
+
+    bool Delete(Entry *entry);
+
+private:
+    friend MapBasedGlobalLockImpl;
+
+    Entry *_head = nullptr;
+    Entry *_tail = nullptr;
+};
+
 /**
  * # Map based implementation with global lock
  *
@@ -35,9 +73,12 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
+    bool AdjustSize();
+
 private:
-    size_t _max_size;
-    std::map<std::string, std::string> _backend;
+    size_t _max_size, _current_size = 0;
+    std::map<std::string, Entry *> _backend;
+    mutable List _entries;
 };
 
 } // namespace Backend
