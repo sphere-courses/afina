@@ -1,7 +1,7 @@
 #ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 
-#include <map>
+#include <unordered_map>
 #include <mutex>
 #include <string>
 
@@ -55,7 +55,7 @@ private:
  */
 class MapBasedGlobalLockImpl : public Afina::Storage {
 public:
-    MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size) {}
+    explicit MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size) {}
     ~MapBasedGlobalLockImpl() {}
 
     // Implements Afina::Storage interface
@@ -77,7 +77,7 @@ public:
 
 private:
     size_t _max_size, _current_size = 0;
-    std::map<std::string, Entry *> _backend;
+    std::unordered_map<std::string, Entry *> _backend;
     mutable List _entries;
 };
 
