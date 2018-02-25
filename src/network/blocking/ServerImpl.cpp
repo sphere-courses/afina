@@ -91,6 +91,7 @@ void ServerImpl::Stop() {
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
     pthread_join(accept_thread, 0);
 }
 
@@ -283,7 +284,7 @@ void ServerImpl::RunConnection(int con_socket) {
                     std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
                     CloseConnection(con_socket);
                 } else if (read_now == 0){
-                    // TODO: Specify behavior for zero input
+                    // TODO: Check if zero return value means socket shutdown
                     CheckConnection(con_socket);
                 } else {
                     current_buffer_size += read_now;
@@ -345,7 +346,7 @@ void ServerImpl::ReadStrict(int con_socket, char *dest, size_t len){
             CloseConnection(con_socket);
             return;
         } else if(read_now == 0){
-            // TODO: Specify behavior for zero input
+            // TODO: Check if zero return value means socket shutdown
             CheckConnection(con_socket);
         } else {
             read += read_now;
