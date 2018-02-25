@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <cmath>
 
 #include <pthread.h>
 #include <signal.h>
@@ -18,20 +19,14 @@
 #include <unistd.h>
 
 #include <afina/Storage.h>
+#include <afina/execute/Command.h>
+#include <protocol/Parser.h>
+#include <sstream>
+// #include <bits/sigaction.h>
 
 namespace Afina {
 namespace Network {
 namespace Blocking {
-
-void *ServerImpl::RunAcceptorProxy(void *p) {
-    ServerImpl *srv = reinterpret_cast<ServerImpl *>(p);
-    try {
-        srv->RunAcceptor();
-    } catch (std::runtime_error &ex) {
-        std::cerr << "Server fails: " << ex.what() << std::endl;
-    }
-    return 0;
-}
 
 // See Server.h
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
@@ -82,7 +77,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // since there will only be one server thread, and the program's main thread (the
     // one running main()) could fulfill this purpose.
     running.store(true);
-    if (pthread_create(&accept_thread, NULL, ServerImpl::RunAcceptorProxy, this) < 0) {
+    if (pthread_create(&accept_thread, NULL, ServerImpl::RunAcceptorProxy, this) != 0) {
         throw std::runtime_error("Could not create server thread");
     }
 }
@@ -97,6 +92,28 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     pthread_join(accept_thread, 0);
+}
+
+// See Server.h
+void *ServerImpl::RunAcceptorProxy(void *p) {
+    auto srv = reinterpret_cast<ServerImpl *>(p);
+    try {
+        srv->RunAcceptor();
+    } catch (std::runtime_error &ex) {
+        std::cerr << "Server fails: " << ex.what() << std::endl;
+    }
+    return nullptr;
+}
+
+// See Server.h
+void *ServerImpl::RunConnectionProxy(void *proxy_args) {
+    auto *args = reinterpret_cast<ServerImpl::ProxyArgs*>(proxy_args);
+    try{
+        args->server->RunConnection(args->con_socket);
+    } catch (std::runtime_error &ex) {
+        std::cerr << "Connection fails: " << ex.what() << std::endl;
+    }
+    return nullptr;
 }
 
 // See Server.h
@@ -170,6 +187,29 @@ void ServerImpl::RunAcceptor() {
             throw std::runtime_error("Socket accept() failed");
         }
 
+
+        connections_mutex.lock();
+        if(connections.size() + 1 > max_workers){
+            // TODO: Send msg to client signalising limit overhead
+            std::cout << "Connection number limit reached" << std::endl;
+            close(client_socket);
+        } else {
+            pthread_t new_thread;
+            ServerImpl::ProxyArgs args = {this, client_socket};
+
+            if (pthread_create(&new_thread, NULL, ServerImpl::RunConnectionProxy, &args) != 0) {
+                // TODO: Don`t stop server if connection failed
+                close(server_socket);
+                close(client_socket);
+                throw std::runtime_error("Could not create connection thread");
+            }
+            connections.insert(new_thread);
+        }
+        // TODO: Is it the right place for unlock?
+        connections_mutex.unlock();
+
+        // Default behavior
+        /*
         // TODO: Start new thread and process data from/to connection
         {
             std::string msg = "TODO: start new thread and process memcached protocol instead";
@@ -180,6 +220,7 @@ void ServerImpl::RunAcceptor() {
             }
             close(client_socket);
         }
+        */
     }
 
     // Cleanup on exit...
@@ -187,9 +228,169 @@ void ServerImpl::RunAcceptor() {
 }
 
 // See Server.h
-void ServerImpl::RunConnection() {
+void ServerImpl::RunConnection(int con_socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    // TODO: All connection work is here
+    // TODO: All connection work is her
+
+    // TODO: Fix this code
+    /*
+    socklen_t sockop_out_len;
+    if(getsockopt(con_socket, SOL_SOCKET, SO_RCVBUF, &max_buffer_size, &sockop_out_len) != 0){
+        close(con_socket);
+        // TODO: cout vs cerr vs something else
+        std::cout << "Could not get buffer size; Error: " << std::string(strerror(errno)) << std::endl;
+        return;
+    }
+    */
+
+    // TODO: Better solution for max_***_size
+    int max_buffer_size, max_data_size;
+    max_buffer_size = 1024;
+    max_data_size = 1024;
+
+    // Delimiter
+    constexpr char addition[] = "\r\n";
+    constexpr size_t addition_len = sizeof(addition) - 1;
+    
+    char buffer[max_buffer_size];
+    char data_block[max_data_size];
+
+    size_t current_buffer_size, parsed;
+    current_buffer_size = 0;
+    parsed = 0;
+
+    Protocol::Parser parser;
+    std::stringstream server_ans_stream;
+    std::string server_ans;
+
+    while(running.load()){
+
+        parser.Reset();
+        server_ans_stream.clear();
+        server_ans.clear();
+
+        try{
+            size_t parsed_now = 0;
+            ssize_t read_now = 0;
+            while(!parser.Parse(buffer + parsed, current_buffer_size - parsed, parsed_now)){
+                parsed += parsed_now;
+                if(current_buffer_size == max_buffer_size){
+                    parsed = 0;
+                    current_buffer_size = 0;
+                }
+                read_now = recv(con_socket, buffer + current_buffer_size, max_buffer_size - current_buffer_size, 0);
+                if(read_now == -1){
+                    // TODO: << "SERVER_ERROR " << e.what() << '\r' << '\n';cout vs cerr vs something else
+                    std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
+                    CloseConnection(con_socket);
+                } else if (read_now == 0){
+                    // TODO: Specify behavior for zero input
+                    CheckConnection(con_socket);
+                } else {
+                    current_buffer_size += read_now;
+                }
+            }
+            parsed += parsed_now;
+
+            uint32_t body_size;
+            std::unique_ptr<Execute::Command> command(parser.Build(body_size));
+            if(body_size > max_data_size){
+                throw std::runtime_error("Too long data_block");
+            } else if(body_size > 0) {
+                // TODO: use C++ styled function
+                size_t current_data_size = std::min(current_buffer_size - parsed, static_cast<size_t >(body_size));
+                current_buffer_size = current_buffer_size - parsed - current_data_size;
+                memcpy(data_block, buffer + parsed, current_data_size);
+                memmove(buffer, buffer + parsed + current_data_size, current_buffer_size);
+
+                ReadStrict(con_socket, data_block + current_data_size, body_size - current_data_size);
+
+                if(current_buffer_size < addition_len) {
+                    ReadStrict(con_socket, buffer + current_buffer_size, addition_len - current_buffer_size);
+                    current_buffer_size = addition_len;
+                }
+
+                if(strncmp(buffer, addition, addition_len) != 0) {
+                    throw std::runtime_error("Incorrect command format");
+                }
+                parsed = addition_len;
+            } else {
+                current_buffer_size = current_buffer_size - parsed;
+                memmove(buffer, buffer + parsed, current_buffer_size);
+                parsed = 0;
+            }
+
+            command->Execute(*this->pStorage, std::string(data_block, body_size), server_ans);
+            WriteStrict(con_socket, server_ans.data(), server_ans.size());
+        } catch (std::exception &e){
+            std::cout << "SERVER_ERROR " << e.what() << std::endl;
+            server_ans_stream << "SERVER_ERROR " << e.what() << '\r' << '\n';
+            std::string server_ans = server_ans_stream.str();
+            WriteStrict(con_socket, server_ans.data(), server_ans.size());
+            current_buffer_size = 0;
+            parsed = 0;
+        }
+    }
+    CloseConnection(con_socket);
+}
+
+// See Server.h
+void ServerImpl::ReadStrict(int con_socket, char *dest, size_t len){
+    ssize_t read = 0;
+    ssize_t read_now = 0;
+    while (read < len) {
+        read_now = recv(con_socket, dest + read, len - read, 0);
+        if (read_now == -1) {
+            // TODO: cout vs cerr vs something else
+            std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
+            CloseConnection(con_socket);
+            return;
+        } else if(read_now == 0){
+            // TODO: Specify behavior for zero input
+            CheckConnection(con_socket);
+        } else {
+            read += read_now;
+        }
+    }
+}
+
+// See Server.h
+void ServerImpl::WriteStrict(int con_socket, const char *source, size_t len){
+    ssize_t sent = 0;
+    ssize_t send_now = 0;
+    
+    while(sent < len) {
+        send_now = send(con_socket, source + sent, len - sent, 0);
+        if (send_now == -1) {
+            // TODO: cout vs cerr vs something else
+            std::cout << "send error: " << std::string(strerror(errno)) << std::endl;
+            CloseConnection(con_socket);
+        } else {
+            sent += send_now;
+        }
+    }
+}
+
+// See Server.h
+void ServerImpl::CheckConnection(int con_socket) {
+    // TODO: Find out better way to determine if the connection closed
+    char test;
+    if(send(con_socket, &test, 1, MSG_NOSIGNAL) == -1){
+        CloseConnection(con_socket);
+    }
+}
+
+// See Server.h
+void ServerImpl::CloseConnection(int con_socket){
+    pthread_t self_id = pthread_self();
+    // TODO: Add more flexible shutdown()
+    close(con_socket);
+
+    connections_mutex.lock();
+    connections.erase(self_id);
+    connections_mutex.unlock();
+
+    pthread_exit(NULL);
 }
 
 } // namespace Blocking

@@ -40,10 +40,30 @@ protected:
     /**
      * Methos is running for each connection
      */
-    void RunConnection();
+    void RunConnection(int con_socket);
 
 private:
     static void *RunAcceptorProxy(void *p);
+    static void *RunConnectionProxy(void *proxy_args);
+
+    // Check if the connection exists. Control flow may not return from this function
+    void CheckConnection(int con_socket);
+
+    // Close connection and destroy worker. Control flow may not return from this function
+    void CloseConnection(int con_socket);
+
+    // Read len bytes from con_socket to dest. Control flow may not return from this function
+    void ReadStrict(int con_socket, char *dest, size_t len);
+
+    // Write len to con_socket from source. Control flow may not return from this function
+    void WriteStrict(int con_socket, const char *source, size_t len);
+
+    // Nested class to pass parameters of new connection through proxy function
+    class ProxyArgs{
+    public:
+        ServerImpl *server;
+        int con_socket;
+    };
 
     // Atomic flag to notify threads when it is time to stop. Note that
     // flag must be atomic in order to safely publisj changes cross thread
