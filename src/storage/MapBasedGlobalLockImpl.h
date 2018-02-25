@@ -73,7 +73,7 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
-    bool AdjustSize();
+    bool ReleaseSpace(size_t amount);
 
 private:
     size_t _max_size, _current_size = 0;
