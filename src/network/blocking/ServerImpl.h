@@ -20,7 +20,8 @@ namespace Blocking {
 class ServerImpl : public Server {
 public:
     explicit ServerImpl(std::shared_ptr<Afina::Storage> ps);
-    ~ServerImpl();
+
+    ~ServerImpl() = default;
 
     // See Server.h
     void Start(uint32_t port, uint16_t workers) override;
@@ -44,6 +45,7 @@ protected:
 
 private:
     static void *RunAcceptorProxy(void *p);
+
     static void *RunConnectionProxy(void *proxy_args);
 
     // Check if the connection exists. Control flow may not return from this function

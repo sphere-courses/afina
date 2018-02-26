@@ -24,9 +24,6 @@ namespace Blocking {
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
 
 // See Server.h
-ServerImpl::~ServerImpl() = default;
-
-// See Server.h
 void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
@@ -36,7 +33,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
-    if (pthread_sigmask(SIG_BLOCK, &sig_mask, NULL) != 0) {
+    if (pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr) != 0) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
 
@@ -69,7 +66,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // since there will only be one server thread, and the program's main thread (the
     // one running main()) could fulfill this purpose.
     running.store(true);
-    if (pthread_create(&accept_thread, NULL, ServerImpl::RunAcceptorProxy, this) != 0) {
+    if (pthread_create(&accept_thread, nullptr, ServerImpl::RunAcceptorProxy, this) != 0) {
         throw std::runtime_error("Could not create server thread");
     }
 }
@@ -84,7 +81,7 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
-    pthread_join(accept_thread, 0);
+    pthread_join(accept_thread, nullptr);
 }
 
 // See Server.h
@@ -190,7 +187,7 @@ void ServerImpl::RunAcceptor() {
             pthread_t new_thread;
             ServerImpl::ProxyArgs args = {this, client_socket};
 
-            if (pthread_create(&new_thread, NULL, ServerImpl::RunConnectionProxy, &args) != 0) {
+            if (pthread_create(&new_thread, nullptr, ServerImpl::RunConnectionProxy, &args) != 0) {
                 // TODO: Don`t stop server if connection failed
                 close(server_socket);
                 close(client_socket);
@@ -273,7 +270,7 @@ void ServerImpl::RunConnection(int con_socket) {
                 read_now = recv(con_socket, buffer + current_buffer_size, max_buffer_size - current_buffer_size, 0);
                 if(read_now == -1){
                     // TODO: << "SERVER_ERROR " << e.what() << '\r' << '\n';cout vs cerr vs something else
-                    std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
+                    std::cout << "recv error: " << std::string(strerror(errno)) << std::endl;
                     CloseConnection(con_socket);
                 } else if (read_now == 0){
                     // TODO: Check if zero return value means socket shutdown
@@ -381,7 +378,7 @@ void ServerImpl::CloseConnection(int con_socket){
     connections.erase(self_id);
     connections_mutex.unlock();
 
-    pthread_exit(NULL);
+    pthread_exit(nullptr);
 }
 
 } // namespace Blocking
