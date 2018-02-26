@@ -18,11 +18,11 @@ class Entry {
 public:
     Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val);
 
-    ~Entry(){};
+    ~Entry() = default;
 
     std::string& GetValue();
 
-    const std::string& GetKey();
+    const std::string& GetKey() const;
 
 private:
     friend List;
@@ -36,7 +36,8 @@ private:
 
 class List{
 public:
-    List(){};
+    List() = default;
+
     ~List();
 
     bool Put(const std::string& key, const std::string& value, Entry *& entry);
@@ -61,7 +62,7 @@ class MapBasedGlobalLockImpl : public Afina::Storage {
 public:
     explicit MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size) {}
 
-    ~MapBasedGlobalLockImpl() {}
+    ~MapBasedGlobalLockImpl() = default;
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -82,6 +83,7 @@ public:
     bool ReleaseSpace(size_t amount);
 
 private:
+    mutable std::mutex _backend_mutex;
     size_t _max_size, _current_size = 0;
     std::unordered_map<std::string, Entry *> _backend;
     mutable List _entries;

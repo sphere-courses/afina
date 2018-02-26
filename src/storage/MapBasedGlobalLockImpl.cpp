@@ -1,6 +1,5 @@
 #include "MapBasedGlobalLockImpl.h"
 
-#include <mutex>
 #include <iostream>
 
 
@@ -8,13 +7,13 @@ namespace Afina {
 namespace Backend {
 
 Entry::Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val)
-        : _prev(prev), _next(next), _key(key), _value(val){};
+        : _prev(prev), _next(next), _key(key), _value(val) {};
 
 std::string& Entry::GetValue(){
     return _value;
 }
 
-const std::string& Entry::GetKey(){
+const std::string& Entry::GetKey() const{
     return _key;
 }
 
@@ -29,7 +28,7 @@ List::~List() {
 }
 
 bool List::Put(const std::string& key, const std::string& value, Entry *& entry){
-    Entry *new_entry = new Entry(nullptr, _head, key, value);
+    auto new_entry = new Entry(nullptr, _head, key, value);
 
     if(_head != nullptr) {
         _head->_prev = new_entry;
@@ -91,6 +90,8 @@ bool List::Delete(Entry *entry) {
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::ReleaseSpace(size_t amount) {
+    // No lock need because ReleaseSpace called from critical sections only
+
     if(amount > _max_size){
         return false;
     }
@@ -102,6 +103,8 @@ bool MapBasedGlobalLockImpl::ReleaseSpace(size_t amount) {
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
+    std::lock_guard<std::mutex> lock(_backend_mutex);
+
     auto element = _backend.find(key);
     size_t size_delta = 0;
 
@@ -135,6 +138,8 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
+    std::lock_guard<std::mutex> lock(_backend_mutex);
+
     auto element = _backend.find(key);
     size_t size_delta = 0;
 
@@ -160,6 +165,8 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &value) {
+    std::lock_guard<std::mutex> lock(_backend_mutex);
+
     auto element = _backend.find(key);
     size_t size_delta = 0;
 
@@ -182,6 +189,8 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
+    std::lock_guard<std::mutex> lock(_backend_mutex);
+
     auto element = _backend.find(key);
 
     if(element == _backend.end()){
@@ -198,6 +207,8 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const {
+    std::lock_guard<std::mutex> lock(_backend_mutex);
+
     auto element = _backend.find(key);
 
     if(element == _backend.end()){
