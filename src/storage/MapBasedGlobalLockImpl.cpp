@@ -8,7 +8,15 @@ namespace Afina {
 namespace Backend {
 
 Entry::Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val)
-        : _prev(prev), _next(next), _key(key), _val(val){};
+        : _prev(prev), _next(next), _key(key), _value(val){};
+
+std::string& Entry::GetValue(){
+    return _value;
+}
+
+const std::string& Entry::GetKey(){
+    return _key;
+}
 
 
 List::~List() {
@@ -87,7 +95,7 @@ bool MapBasedGlobalLockImpl::ReleaseSpace(size_t amount) {
         return false;
     }
     while(_current_size + amount > _max_size){
-        Delete(_entries._tail->_key);
+        Delete(_entries._tail->GetKey());
     }
     return true;
 }
@@ -112,14 +120,14 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
         new_element.first->second = new_entry;
     } else {
         Entry *entry = element->second;
-        size_delta = value.size() - entry->_val.size();
+        size_delta = value.size() - entry->GetValue().size();
 
         if(!ReleaseSpace(size_delta)){
             return false;
         }
 
         _current_size = _current_size + size_delta;
-        entry->_val = value;
+        entry->GetValue() = value;
         _entries.ToForward(entry);
     }
     return true;
@@ -159,7 +167,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
         return false;
     } else {
         Entry *entry = element->second;
-        size_delta = value.size() - entry->_val.size();
+        size_delta = value.size() - entry->GetValue().size();
 
         if(!ReleaseSpace(size_delta)){
             return false;
@@ -179,7 +187,7 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     if(element == _backend.end()){
         return false;
     } else {
-        _current_size = _current_size - (element->first.size() + element->second->_val.size());
+        _current_size = _current_size - (element->first.size() + element->second->GetValue().size());
         _entries.Delete(element->second);
         _backend.erase(element);
 
@@ -196,7 +204,7 @@ bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) con
         return false;
     } else {
         Entry *entry = element->second;
-        value = entry->_val;
+        value = entry->GetValue();
         _entries.ToForward(entry);
 
         return true;

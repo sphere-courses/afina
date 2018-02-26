@@ -17,16 +17,20 @@ class MapBasedGlobalLockImpl;
 class Entry {
 public:
     Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val);
+
     ~Entry(){};
+
+    std::string& GetValue();
+
+    const std::string& GetKey();
 
 private:
     friend List;
-    friend MapBasedGlobalLockImpl;
 
     Entry *_prev = nullptr;
     Entry *_next = nullptr;
     const std::string& _key;
-    std::string _val;
+    std::string _value;
 };
 
 
@@ -56,6 +60,7 @@ private:
 class MapBasedGlobalLockImpl : public Afina::Storage {
 public:
     explicit MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size) {}
+
     ~MapBasedGlobalLockImpl() {}
 
     // Implements Afina::Storage interface
@@ -73,6 +78,7 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
+    // Try to release at least amount bytes in storage
     bool ReleaseSpace(size_t amount);
 
 private:
