@@ -1,28 +1,20 @@
 #include "ServerImpl.h"
 
-#include <cassert>
 #include <cstring>
 #include <iostream>
-#include <memory>
-#include <stdexcept>
 #include <cmath>
 
-#include <pthread.h>
-#include <signal.h>
+#include <csignal>
 
 #include <netdb.h>
-#include <sys/socket.h>
-#include <sys/types.h>
 
 #include <arpa/inet.h>
-#include <netinet/in.h>
 #include <unistd.h>
 
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
 #include <protocol/Parser.h>
 #include <sstream>
-// #include <bits/sigaction.h>
 
 namespace Afina {
 namespace Network {
@@ -32,7 +24,7 @@ namespace Blocking {
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
 
 // See Server.h
-ServerImpl::~ServerImpl() {}
+ServerImpl::~ServerImpl() = default;
 
 // See Server.h
 void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
@@ -297,11 +289,10 @@ void ServerImpl::RunConnection(int con_socket) {
             if(body_size > max_data_size){
                 throw std::runtime_error("Too long data_block");
             } else if(body_size > 0) {
-                // TODO: use C++ styled function
                 size_t current_data_size = std::min(current_buffer_size - parsed, static_cast<size_t >(body_size));
                 current_buffer_size = current_buffer_size - parsed - current_data_size;
-                memcpy(data_block, buffer + parsed, current_data_size);
-                memmove(buffer, buffer + parsed + current_data_size, current_buffer_size);
+                std::memcpy(data_block, buffer + parsed, current_data_size);
+                std::memmove(buffer, buffer + parsed + current_data_size, current_buffer_size);
 
                 ReadStrict(con_socket, data_block + current_data_size, body_size - current_data_size);
 
@@ -325,7 +316,7 @@ void ServerImpl::RunConnection(int con_socket) {
         } catch (std::exception &e){
             std::cout << "SERVER_ERROR " << e.what() << std::endl;
             server_ans_stream << "SERVER_ERROR " << e.what() << '\r' << '\n';
-            std::string server_ans = server_ans_stream.str();
+            server_ans = server_ans_stream.str();
             WriteStrict(con_socket, server_ans.data(), server_ans.size());
             current_buffer_size = 0;
             parsed = 0;

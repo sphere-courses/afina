@@ -19,7 +19,7 @@ namespace Blocking {
  */
 class ServerImpl : public Server {
 public:
-    ServerImpl(std::shared_ptr<Afina::Storage> ps);
+    explicit ServerImpl(std::shared_ptr<Afina::Storage> ps);
     ~ServerImpl();
 
     // See Server.h
