@@ -103,7 +103,7 @@ bool MapBasedGlobalLockImpl::ReleaseSpace(size_t amount) {
         return false;
     }
     while(_current_size + amount > _max_size){
-        Delete(_entries._tail->GetKey());
+        _lock_free_delete(_entries._tail->GetKey());
     }
     return true;
 }
@@ -198,6 +198,11 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     std::lock_guard<std::mutex> lock(_backend_mutex);
 
+    _lock_free_delete(key);
+}
+
+// See MapBasedGlobalLockImpl.h
+bool MapBasedGlobalLockImpl::_lock_free_delete(const std::string &key) {
     auto element = _backend.find(key);
 
     if(element == _backend.end()){
@@ -209,7 +214,6 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 
         return true;
     }
-
 }
 
 // See MapBasedGlobalLockImpl.h

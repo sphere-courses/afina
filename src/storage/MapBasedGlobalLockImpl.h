@@ -88,6 +88,8 @@ private:
     size_t _max_size, _current_size = 0;
     std::unordered_map<std::string, Entry *> _backend;
     mutable ListOnMap _entries;
+
+    bool _lock_free_delete(const std::string &key);
 };
 
 } // namespace Backend
