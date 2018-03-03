@@ -6,19 +6,23 @@
 namespace Afina {
 namespace Backend {
 
+// See MapBasedGlobalLockImpl.h
 Entry::Entry(Entry *prev, Entry *next, const std::string& key, const std::string& val)
         : _prev(prev), _next(next), _key(key), _value(val) {};
 
+// See MapBasedGlobalLockImpl.h
 std::string& Entry::GetValue(){
     return _value;
 }
 
+// See MapBasedGlobalLockImpl.h
 const std::string& Entry::GetKey() const{
     return _key;
 }
 
 
-List::~List() {
+// See MapBasedGlobalLockImpl.h
+ListOnMap::~ListOnMap() {
     Entry *iter = _head;
     while(iter->_next != nullptr){
         iter = iter->_next;
@@ -27,7 +31,8 @@ List::~List() {
     delete iter;
 }
 
-bool List::Put(const std::string& key, const std::string& value, Entry *& entry){
+// See MapBasedGlobalLockImpl.h
+bool ListOnMap::Put(const std::string& key, const std::string& value, Entry *& entry){
     auto new_entry = new Entry(nullptr, _head, key, value);
 
     if(_head != nullptr) {
@@ -42,7 +47,8 @@ bool List::Put(const std::string& key, const std::string& value, Entry *& entry)
     return true;
 }
 
-bool List::ToForward(Entry *entry) {
+// See MapBasedGlobalLockImpl.h
+bool ListOnMap::ToForward(Entry *entry) {
     Entry *next = entry->_next;
     Entry *prev = entry->_prev;
 
@@ -66,7 +72,8 @@ bool List::ToForward(Entry *entry) {
     return true;
 };
 
-bool List::Delete(Entry *entry) {
+// See MapBasedGlobalLockImpl.h
+bool ListOnMap::Delete(Entry *entry) {
     Entry *next = entry->_next;
     Entry *prev = entry->_prev;
 

@@ -11,7 +11,7 @@ namespace Afina {
 namespace Backend {
 
 class Entry;
-class List;
+class ListOnMap;
 class MapBasedGlobalLockImpl;
 
 class Entry {
@@ -25,7 +25,7 @@ public:
     const std::string& GetKey() const;
 
 private:
-    friend List;
+    friend ListOnMap;
 
     Entry *_prev = nullptr;
     Entry *_next = nullptr;
@@ -34,12 +34,13 @@ private:
 };
 
 
-class List{
+class ListOnMap{
 public:
-    List() = default;
+    ListOnMap() = default;
 
-    ~List();
+    ~ListOnMap();
 
+    // entry is an output parameter - new element in ListOnMap
     bool Put(const std::string& key, const std::string& value, Entry *& entry);
 
     bool ToForward(Entry *entry);
@@ -86,7 +87,7 @@ private:
     mutable std::mutex _backend_mutex;
     size_t _max_size, _current_size = 0;
     std::unordered_map<std::string, Entry *> _backend;
-    mutable List _entries;
+    mutable ListOnMap _entries;
 };
 
 } // namespace Backend
