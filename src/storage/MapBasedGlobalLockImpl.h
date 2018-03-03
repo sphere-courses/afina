@@ -80,8 +80,6 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
-    // Try to release at least amount bytes in storage
-    bool ReleaseSpace(size_t amount);
 
 private:
     mutable std::mutex _backend_mutex;
@@ -90,6 +88,9 @@ private:
     mutable ListOnMap _entries;
 
     bool _lock_free_delete(const std::string &key);
+
+    // Try to release at least amount bytes in storage
+    bool _release_space(size_t amount);
 };
 
 } // namespace Backend

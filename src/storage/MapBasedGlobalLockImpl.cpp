@@ -96,8 +96,8 @@ bool ListOnMap::Delete(Entry *entry) {
 
 
 // See MapBasedGlobalLockImpl.h
-bool MapBasedGlobalLockImpl::ReleaseSpace(size_t amount) {
-    // No lock need because ReleaseSpace called from critical sections only
+bool MapBasedGlobalLockImpl::_release_space(size_t amount) {
+    // No lock need because _release_space called from critical sections only
 
     if(amount > _max_size){
         return false;
@@ -118,7 +118,7 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
     if(element == _backend.end()){
         size_delta = key.size() + value.size();
 
-        if(!ReleaseSpace(size_delta)){
+        if(!_release_space(size_delta)){
             return false;
         }
 
@@ -132,7 +132,7 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
         Entry *entry = element->second;
         size_delta = value.size() - entry->GetValue().size();
 
-        if(!ReleaseSpace(size_delta)){
+        if(!_release_space(size_delta)){
             return false;
         }
 
@@ -153,7 +153,7 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
     if(element == _backend.end()){
         size_delta = key.size() + value.size();
 
-        if(!ReleaseSpace(size_delta)){
+        if(!_release_space(size_delta)){
             return false;
         }
 
@@ -183,7 +183,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
         Entry *entry = element->second;
         size_delta = value.size() - entry->GetValue().size();
 
-        if(!ReleaseSpace(size_delta)){
+        if(!_release_space(size_delta)){
             return false;
         }
 
