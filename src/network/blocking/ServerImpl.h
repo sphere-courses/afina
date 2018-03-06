@@ -85,6 +85,9 @@ private:
     // Read-only
     uint32_t listen_port;
 
+    // Main (accepter) socket
+    int server_socket;
+
     // Mutex used to access connections list
     std::mutex connections_mutex;
 
