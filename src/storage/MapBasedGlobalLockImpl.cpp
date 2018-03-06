@@ -23,12 +23,12 @@ const std::string& Entry::GetKey() const{
 
 // See MapBasedGlobalLockImpl.h
 ListOnMap::~ListOnMap() {
-    Entry *iter = _head;
-    while(iter->_next != nullptr){
-        iter = iter->_next;
-        delete iter->_prev;
+    Entry *iter = _head, *next;
+    while(iter != nullptr){
+        next = iter->_next;
+        delete iter;
+        iter = next;
     }
-    delete iter;
 }
 
 // See MapBasedGlobalLockImpl.h
