@@ -75,12 +75,18 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
 void ServerImpl::Stop() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     running.store(false);
+    shutdown(server_socket, SHUT_RDWR);
 }
 
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     pthread_join(accept_thread, nullptr);
+
+    std::unique_lock<std::mutex> lock(connections_mutex);
+    while(!connections.empty()){
+        connections_cv.wait(lock);
+    }
 }
 
 // See Server.h
@@ -129,7 +135,7 @@ void ServerImpl::RunAcceptor() {
     // - Family: IPv4
     // - Type: Full-duplex stream (reliable)
     // - Protocol: TCP
-    int server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server_socket == -1) {
         throw std::runtime_error("Failed to open socket");
     }
@@ -173,11 +179,14 @@ void ServerImpl::RunAcceptor() {
         // the incoming connection arrives
         if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &sinSize)) == -1) {
             close(server_socket);
+            if(errno == EINVAL){
+                return;
+            }
             throw std::runtime_error("Socket accept() failed");
         }
 
-
         connections_mutex.lock();
+
         if(connections.size() + 1 > max_workers){
             // TODO: Send msg to client signalising limit overhead
             std::cout << "Connection number limit reached" << std::endl;
@@ -190,28 +199,15 @@ void ServerImpl::RunAcceptor() {
                 // TODO: Don`t stop server if connection failed
                 close(server_socket);
                 close(client_socket);
+                connections_mutex.unlock();
                 throw std::runtime_error("Could not create connection thread");
             }
             connections.insert(new_thread);
         }
+
         // TODO: Is it the right place for unlock?
         connections_mutex.unlock();
-
-        // Default behavior
-        /*
-        // TODO: Start new thread and process data from/to connection
-        {
-            std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                close(client_socket);
-                close(server_socket);
-                throw std::runtime_error("Socket send() failed");
-            }
-            close(client_socket);
-        }
-        */
     }
-
     // Cleanup on exit...
     close(server_socket);
 }
@@ -373,9 +369,9 @@ void ServerImpl::CloseConnection(int con_socket){
     // TODO: Add more flexible shutdown()
     close(con_socket);
 
-    connections_mutex.lock();
+    std::unique_lock<std::mutex> lock(connections_mutex);
     connections.erase(self_id);
-    connections_mutex.unlock();
+    connections_cv.notify_all();
 
     pthread_exit(nullptr);
 }
