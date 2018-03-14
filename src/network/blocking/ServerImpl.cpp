@@ -1,20 +1,21 @@
 #include "ServerImpl.h"
 
 #include <cstring>
-#include <iostream>
-#include <cmath>
 
-#include <csignal>
-
-#include <netdb.h>
+#include <sys/signal.h>
 
 #include <arpa/inet.h>
 #include <unistd.h>
 
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
-#include <protocol/Parser.h>
+#include "../../executor/Executor.cpp"
+#include "../../protocol/Parser.h"
 #include <sstream>
+
+
+
+using namespace Afina;
 
 namespace Afina {
 namespace Network {
@@ -41,34 +42,11 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // variable value visibility
     max_workers = n_workers;
     listen_port = port;
+    executor.Start();//3, max_workers);
 
-    // The pthread_create function creates a new thread.
-    //
-    // The first parameter is a pointer to a pthread_t variable, which we can use
-    // in the remainder of the program to manage this thread.
-    //
-    // The second parameter is used to specify the attributes of this new thread
-    // (e.g., its stack size). We can leave it NULL here.
-    //
-    // The third parameter is the function this thread will run. This function *must*
-    // have the following prototype:
-    //    void *f(void *args);
-    //
-    // Note how the function expects a single parameter of type void*. We are using it to
-    // pass this pointer in order to proxy call to the class member function. The fourth
-    // parameter to pthread_create is used to specify this parameter value.
-    //
-    // The thread we are creating here is the "server thread", which will be
-    // responsible for listening on port 23300 for incoming connections. This thread,
-    // in turn, will spawn threads to service each incoming connection, allowing
-    // multiple clients to connect simultaneously.
-    // Note that, in this particular example, creating a "server thread" is redundant,
-    // since there will only be one server thread, and the program's main thread (the
-    // one running main()) could fulfill this purpose.
     running.store(true);
-    if (pthread_create(&accept_thread, nullptr, ServerImpl::RunAcceptorProxy, this) != 0) {
-        throw std::runtime_error("Could not create server thread");
-    }
+
+    executor.Execute(ServerImpl::RunAcceptorProxy, this);
 }
 
 // See Server.h
@@ -76,17 +54,13 @@ void ServerImpl::Stop() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     running.store(false);
     shutdown(server_socket, SHUT_RDWR);
+    executor.Stop(false);
 }
 
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    pthread_join(accept_thread, nullptr);
-
-    std::unique_lock<std::mutex> lock(connections_mutex);
-    while(!connections.empty()){
-        connections_cv.wait(lock);
-    }
+    executor.Join();
 }
 
 // See Server.h
@@ -185,28 +159,13 @@ void ServerImpl::RunAcceptor() {
             throw std::runtime_error("Socket accept() failed");
         }
 
-        connections_mutex.lock();
+        ServerImpl::ProxyArgs args = {this, client_socket};
 
-        if(connections.size() + 1 > max_workers){
-            // TODO: Send msg to client signalising limit overhead
-            std::cout << "Connection number limit reached" << std::endl;
+        if(!executor.Execute(ServerImpl::RunConnectionProxy, &args)){
+            close(server_socket);
             close(client_socket);
-        } else {
-            pthread_t new_thread;
-            ServerImpl::ProxyArgs args = {this, client_socket};
-
-            if (pthread_create(&new_thread, nullptr, ServerImpl::RunConnectionProxy, &args) != 0) {
-                // TODO: Don`t stop server if connection failed
-                close(server_socket);
-                close(client_socket);
-                connections_mutex.unlock();
-                throw std::runtime_error("Could not create connection thread");
-            }
-            connections.insert(new_thread);
+            throw std::runtime_error("Could not create connection thread");
         }
-
-        // TODO: Is it the right place for unlock?
-        connections_mutex.unlock();
     }
     // Cleanup on exit...
     close(server_socket);
@@ -235,7 +194,7 @@ void ServerImpl::RunConnection(int con_socket) {
     // Delimiter
     constexpr char addition[] = "\r\n";
     constexpr size_t addition_len = sizeof(addition) - 1;
-    
+
     char buffer[max_buffer_size];
     char data_block[max_data_size];
 
@@ -267,9 +226,13 @@ void ServerImpl::RunConnection(int con_socket) {
                     // TODO: << "SERVER_ERROR " << e.what() << '\r' << '\n';cout vs cerr vs something else
                     std::cout << "recv error: " << std::string(strerror(errno)) << std::endl;
                     CloseConnection(con_socket);
+                    return;
                 } else if (read_now == 0){
                     // TODO: Check if zero return value means socket shutdown
-                    CheckConnection(con_socket);
+                    if(!IsConnectionActive(con_socket)){
+                        CloseConnection(con_socket);
+                        return;
+                    }
                 } else {
                     current_buffer_size += read_now;
                 }
@@ -286,10 +249,14 @@ void ServerImpl::RunConnection(int con_socket) {
                 std::memcpy(data_block, buffer + parsed, current_data_size);
                 std::memmove(buffer, buffer + parsed + current_data_size, current_buffer_size);
 
-                ReadStrict(con_socket, data_block + current_data_size, body_size - current_data_size);
+                if(!ReadStrict(con_socket, data_block + current_data_size, body_size - current_data_size)){
+                    throw std::runtime_error("Connection was spontaneously closed");
+                }
 
                 if(current_buffer_size < addition_len) {
-                    ReadStrict(con_socket, buffer + current_buffer_size, addition_len - current_buffer_size);
+                    if(!ReadStrict(con_socket, buffer + current_buffer_size, addition_len - current_buffer_size)){
+                        throw std::runtime_error("Connection was spontaneously closed");
+                    }
                     current_buffer_size = addition_len;
                 }
 
@@ -304,12 +271,16 @@ void ServerImpl::RunConnection(int con_socket) {
             }
 
             command->Execute(*this->pStorage, std::string(data_block, body_size), server_ans);
-            WriteStrict(con_socket, server_ans.data(), server_ans.size());
+            if(!WriteStrict(con_socket, server_ans.data(), server_ans.size())){
+                throw std::runtime_error("Connection was spontaneously closed");
+            }
         } catch (std::exception &e){
             std::cout << "SERVER_ERROR " << e.what() << std::endl;
             server_ans_stream << "SERVER_ERROR " << e.what() << '\r' << '\n';
             server_ans = server_ans_stream.str();
-            WriteStrict(con_socket, server_ans.data(), server_ans.size());
+            if(!WriteStrict(con_socket, server_ans.data(), server_ans.size())){
+                throw std::runtime_error("Connection was spontaneously closed");
+            }
             current_buffer_size = 0;
             parsed = 0;
         }
@@ -318,7 +289,7 @@ void ServerImpl::RunConnection(int con_socket) {
 }
 
 // See Server.h
-void ServerImpl::ReadStrict(int con_socket, char *dest, size_t len){
+bool ServerImpl::ReadStrict(int con_socket, char *dest, size_t len){
     ssize_t read = 0;
     ssize_t read_now = 0;
     while (read < len) {
@@ -326,54 +297,51 @@ void ServerImpl::ReadStrict(int con_socket, char *dest, size_t len){
         if (read_now == -1) {
             // TODO: cout vs cerr vs something else
             std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
-            CloseConnection(con_socket);
-            return;
+            return false;
         } else if(read_now == 0){
             // TODO: Check if zero return value means socket shutdown
-            CheckConnection(con_socket);
+            if(!IsConnectionActive(con_socket)){
+                return false;
+            }
         } else {
             read += read_now;
         }
     }
+    return true;
 }
 
 // See Server.h
-void ServerImpl::WriteStrict(int con_socket, const char *source, size_t len){
+bool ServerImpl::WriteStrict(int con_socket, const char *source, size_t len){
     ssize_t sent = 0;
     ssize_t send_now = 0;
-    
+
     while(sent < len) {
         send_now = send(con_socket, source + sent, len - sent, 0);
         if (send_now == -1) {
             // TODO: cout vs cerr vs something else
             std::cout << "send error: " << std::string(strerror(errno)) << std::endl;
-            CloseConnection(con_socket);
+            return false;
         } else {
             sent += send_now;
         }
     }
+    return true;
 }
 
 // See Server.h
-void ServerImpl::CheckConnection(int con_socket) {
+bool ServerImpl::IsConnectionActive(int con_socket) {
     // TODO: Find out better way to determine if the connection closed
     char test;
     if(send(con_socket, &test, 1, MSG_NOSIGNAL) == -1){
-        CloseConnection(con_socket);
+        return false;
     }
+    return true;
 }
 
 // See Server.h
 void ServerImpl::CloseConnection(int con_socket){
-    pthread_t self_id = pthread_self();
     // TODO: Add more flexible shutdown()
     close(con_socket);
-
-    std::unique_lock<std::mutex> lock(connections_mutex);
-    connections.erase(self_id);
-    connections_cv.notify_all();
-
-    pthread_exit(nullptr);
 }
 
 } // namespace Blocking

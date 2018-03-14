@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <unordered_set>
 
+#include "afina/Executor.h"
 #include <afina/network/Server.h>
 
 namespace Afina {
@@ -48,17 +49,17 @@ private:
 
     static void *RunConnectionProxy(void *proxy_args);
 
-    // Check if the connection exists. Control flow may not return from this function
-    void CheckConnection(int con_socket);
+    // Check if the connection exists.
+    bool IsConnectionActive(int con_socket);
 
-    // Close connection and destroy worker. Control flow may not return from this function
+    // Close connection and destroy worker.
     void CloseConnection(int con_socket);
 
-    // Read len bytes from con_socket to dest. Control flow may not return from this function
-    void ReadStrict(int con_socket, char *dest, size_t len);
+    // Read len bytes from con_socket to dest.
+    bool ReadStrict(int con_socket, char *dest, size_t len);
 
-    // Write len to con_socket from source. Control flow may not return from this function
-    void WriteStrict(int con_socket, const char *source, size_t len);
+    // Write len to con_socket from source.
+    bool WriteStrict(int con_socket, const char *source, size_t len);
 
     // Nested class to pass parameters of new connection through proxy function
     class ProxyArgs{
@@ -71,9 +72,6 @@ private:
     // flag must be atomic in order to safely publisj changes cross thread
     // bounds
     std::atomic<bool> running;
-
-    // Thread that is accepting new connections
-    pthread_t accept_thread;
 
     // Maximum number of client allowed to exists concurrently
     // on server, permits access only from inside of accept_thread.
@@ -88,16 +86,8 @@ private:
     // Main (accepter) socket
     int server_socket;
 
-    // Mutex used to access connections list
-    std::mutex connections_mutex;
-
-    // Conditional variable used to notify waiters about empty
-    // connections list
-    std::condition_variable connections_cv;
-
-    // Threads that are processing connection data, permits
-    // access only from inside of accept_thread
-    std::unordered_set<pthread_t> connections;
+    // ThreadPool executor
+    Afina::Executor executor;
 };
 
 } // namespace Blocking
