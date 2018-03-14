@@ -22,7 +22,6 @@ typedef struct {
 // Handle all signals catched
 void signal_handler(uv_signal_t *handle, int signum) {
     Application *pApp = static_cast<Application *>(handle->data);
-
     std::cout << "Receive stop signal" << std::endl;
     uv_stop(handle->loop);
 }
@@ -99,10 +98,15 @@ int main(int argc, char **argv) {
     uv_loop_t loop;
     uv_loop_init(&loop);
 
-    uv_signal_t sig;
-    uv_signal_init(&loop, &sig);
-    uv_signal_start(&sig, signal_handler, SIGTERM | SIGKILL);
-    sig.data = &app;
+
+    // Add handlers of SIGTERM and SIGINT signals
+    uv_signal_t sig_term, sig_int;
+    uv_signal_init(&loop, &sig_term);
+    uv_signal_init(&loop, &sig_int);
+    uv_signal_start(&sig_term, signal_handler, SIGTERM);
+    uv_signal_start(&sig_int, signal_handler, SIGINT);
+    sig_term.data = &app;
+    sig_int.data = &app;
 
     uv_timer_t timer;
     uv_timer_init(&loop, &timer);
