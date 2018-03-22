@@ -3,9 +3,7 @@
 #include <stdexcept>
 
 #include <fcntl.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <iostream>
 
@@ -64,23 +62,12 @@ ssize_t ReadStrict_NonBlock(int socket, char *dest, size_t len){
             std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
             return -1;
         } else if(read_now == 0){
-            if(!IsConnectionActive(socket)){
-                return -1;
-            }
+            return -1;
         } else {
             read += read_now;
         }
     }
     return read;
-}
-
-bool IsConnectionActive(int socket) {
-    // TODO: Find out better way to determine if the connection closed
-    char test;
-    if(send(socket, &test, 1, MSG_NOSIGNAL) == -1){
-        return false;
-    }
-    return true;
 }
 
 

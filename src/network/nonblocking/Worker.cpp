@@ -1,16 +1,11 @@
 #include "Worker.h"
 
 #include <iostream>
-#include <atomic>
 
 #include <unistd.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <cstring>
-#include <protocol/Parser.h>
 #include <afina/execute/Command.h>
-#include <sstream>
 
 #include "Utils.h"
 
@@ -19,15 +14,7 @@ namespace Network {
 namespace NonBlocking {
 
 // See Worker.h
-Worker::Worker(std::shared_ptr<Afina::Storage> ps) : ps_(ps) {
-    // TODO: implementation here
-}
-
-// See Worker.h
-Worker::~Worker() {
-    // TODO: implementation here
-}
-
+Worker::Worker(std::shared_ptr<Afina::Storage> ps) : ps_(ps) {}
 
 // See Worker.h
 void * Worker::RunOnRunProxy(void *proxy_args){
@@ -35,7 +22,7 @@ void * Worker::RunOnRunProxy(void *proxy_args){
     try{
         args->worker_->thread_ = pthread_self();
         args->worker_->OnRun(args->socket_);
-        delete proxy_args;
+        delete args;
     } catch (std::runtime_error &exception) {
         std::cerr << "Connection fails: " << exception.what() << std::endl;
     }
@@ -47,7 +34,7 @@ void Worker::Start(int server_socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     running_.store(true);
 
-    ProxyArgs *args = new ProxyArgs{.worker_ = this, .socket_ = server_socket};
+    auto args = new ProxyArgs{.worker_ = this, .socket_ = server_socket};
     pthread_t buffer;
     if(pthread_create(&buffer, nullptr, Worker::RunOnRunProxy, args) != 0){
         throw std::runtime_error("pthread_create: " + std::string(strerror(errno)));
@@ -86,20 +73,22 @@ void Worker::OnRun(int server_socket) {
         manager_ = new EpollManager(server_socket, this);
     } catch (std::exception & exception) {
         std::cout << exception.what() << std::endl;
-        pthread_exit(NULL);
+        pthread_exit(nullptr);
     }
     while (running_.load()) {
         try {
             manager_->WaitEvent();
         } catch (std::exception& exception){
             std::cout << exception.what() << std::endl;
-            pthread_exit(NULL);
+            pthread_exit(nullptr);
         }
     }
 }
 
+
+// See Worker.h
 Worker::EpollManager::EpollManager(int server_socket, Worker *worker) : server_socket_(server_socket), worker_{worker} {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "network debug: " << __PRETTY_FUNCTION__;
 
     // Since UNIX kernel 2.6.7 it is okay to pass any positive size_t argument
     // to epoll_create with no difference
@@ -116,6 +105,7 @@ Worker::EpollManager::EpollManager(int server_socket, Worker *worker) : server_s
     }
 }
 
+// See Worker.h
 Worker::EpollManager::~EpollManager() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
@@ -125,10 +115,12 @@ Worker::EpollManager::~EpollManager() {
     }
 }
 
+// See Worker.h
 void Worker::EpollManager::Stop() {
     close(epoll_fd_);
 }
 
+// See Worker.h
 void Worker::EpollManager::WaitEvent() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
@@ -143,12 +135,11 @@ void Worker::EpollManager::WaitEvent() {
         if(event_socket == server_socket_){
             if(events_[i].events & EPOLLERR){
                 std::cout << "Error happened on server socket. Client sockets are monitored" << std::endl;
-                close_socket(server_socket_);
+                TerminateEvent(server_socket_, true);
             } else if(events_[i].events & EPOLLHUP) {
                 std::cout << "Server socket closed connection. Client sockets are monitored" << std::endl;
-                close_socket(server_socket_);
-            } else if(connection_sockets_.count(events_[i].events) == 0 &&
-                      events_[i].events & EPOLLIN){
+                TerminateEvent(server_socket_, true);
+            } else if(events_[i].events & EPOLLIN){
                 AcceptEvent();
             } else {
                 //TODO: is server socket valid after signaled unknown event
@@ -157,34 +148,38 @@ void Worker::EpollManager::WaitEvent() {
         } else {
             if(events_[i].events & EPOLLERR){
                 std::cout << "Error happened on client socket" << std::endl;
-                close_socket(event_socket);
+                TerminateEvent(event_socket);
             } else if(events_[i].events & EPOLLHUP) {
                 std::cout << "Client socket close connection" << std::endl;
-                close_socket(event_socket);
+                TerminateEvent(event_socket);
             } else {
-                if(connection_sockets_.count(events_[i].events) == 0 &&
+                if(connection_sockets_.count(event_socket) != 0 &&
                    events_[i].events & EPOLLIN) {
                     ReadEvent(event_socket);
+                    //continue;
                 }
-                if(connection_sockets_.count(events_[i].events) == 0 &&
+                if(connection_sockets_.count(event_socket) != 0 &&
                    events_[i].events & EPOLLOUT) {
                     WriteEvent(event_socket);
+                    //continue;
                 }
                 if(!(events_[i].events & EPOLLIN) && !(events_[i].events & EPOLLOUT)){
                     //TODO: is client socket valid after signaled unknown event
                     std::cout << "Unknown event happened on client socket" << std::endl;
+                    //continue;
                 }
             }
         }
     }
 }
 
+// See Worker.h
 void Worker::EpollManager::AcceptEvent() {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "network debug: " << __PRETTY_FUNCTION__;
 
     int new_socket;
     if((new_socket = accept(server_socket_, nullptr, nullptr)) == -1){
-        close_socket(server_socket_);
+        TerminateEvent(server_socket_, true);
         //TODO: can we continue EpollManager?
         throw std::runtime_error("server_socket: " + std::string(strerror(errno)));
     }
@@ -201,11 +196,26 @@ void Worker::EpollManager::AcceptEvent() {
     if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, new_socket, &client_event) == -1){
         throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
     }
-
 }
 
-void Worker::EpollManager::ReadEvent(int socket) {
+// See Worker.h
+void Worker::EpollManager::TerminateEvent(int socket, bool is_server){
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
+    if(!is_server) {
+        connection_sockets_.erase(socket);
+        connections_.erase(socket);
+    }
+    // Warning! Set event to nullptr is error before kernel 2.6.9
+    if(epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, socket, nullptr) == -1){
+        throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
+    }
+    close_socket(socket);
+}
+
+// See Worker.h
+void Worker::EpollManager::ReadEvent(int socket) {
+    std::cout << "network debug: " << __PRETTY_FUNCTION__ <<  std::endl;
 
     static char addition_[] = "\r\n";
     static size_t addition_len_ = sizeof(addition_) - 1;
@@ -219,9 +229,7 @@ void Worker::EpollManager::ReadEvent(int socket) {
     }
 
     if (!worker_->running_.load()) {
-        connection_sockets_.erase(socket);
-        connections_.erase(socket);
-        close_socket(socket);
+        TerminateEvent(socket);
         return;
     }
 
@@ -233,9 +241,9 @@ void Worker::EpollManager::ReadEvent(int socket) {
             while (!event_connection.parser_.Parse(event_connection.buffer_ + event_connection.parsed_,
                                                    event_connection.current_buffer_size_ - event_connection.parsed_,
                                                    event_connection.parsed_now_)) {
+                event_connection.parsed_ += event_connection.parsed_now_;
 
                 if (event_connection.state_ == Connection::State::BLOCKON_NONE) {
-                    event_connection.parsed_ += event_connection.parsed_now_;
                     if (event_connection.current_buffer_size_ == event_connection.max_buffer_size_) {
                         event_connection.parsed_ = 0;
                         event_connection.current_buffer_size_ = 0;
@@ -254,17 +262,11 @@ void Worker::EpollManager::ReadEvent(int socket) {
                         return;
                     }
                     std::cout << "recv error: " << std::string(strerror(errno)) << std::endl;
-                    connection_sockets_.erase(socket);
-                    connections_.erase(socket);
-                    close_socket(socket);
+                    TerminateEvent(socket);
                     return;
                 } else if (event_connection.read_now_ == 0) {
-                    if (!IsConnectionActive(socket)) {
-                        connection_sockets_.erase(socket);
-                        connections_.erase(socket);
-                        close_socket(socket);
-                        return;
-                    }
+                    TerminateEvent(socket);
+                    return;
                 } else {
                     event_connection.current_buffer_size_ += event_connection.read_now_;
                 }
@@ -313,9 +315,7 @@ void Worker::EpollManager::ReadEvent(int socket) {
                                                              event_connection.body_size_ -
                                                              event_connection.current_data_size_);
             if (event_connection.read_now_ == -1) {
-                connection_sockets_.erase(socket);
-                connections_.erase(socket);
-                close_socket(socket);
+                TerminateEvent(socket);
                 return;
             } else if (event_connection.read_now_ ==
                        event_connection.body_size_ - event_connection.current_data_size_) {
@@ -344,9 +344,7 @@ void Worker::EpollManager::ReadEvent(int socket) {
                                                                  addition_len_ -
                                                                  event_connection.current_buffer_size_);
                 if (event_connection.read_now_ == -1) {
-                    connection_sockets_.erase(socket);
-                    connections_.erase(socket);
-                    close_socket(socket);
+                    TerminateEvent(socket);
                     return;
                 } else if (event_connection.read_now_ ==
                            addition_len_ - event_connection.current_buffer_size_) {
@@ -370,8 +368,9 @@ void Worker::EpollManager::ReadEvent(int socket) {
         event_connection.command_->Execute(*(worker_->ps_),
                                            std::string(event_connection.data_block_, event_connection.body_size_),
                                            server_ans);
-        event_connection.answers_.push(server_ans);
+        event_connection.answers_.push(server_ans + "\r\n");
         WriteEvent(socket);
+        event_connection.parser_.Reset();
     } catch (std::exception &exception){
         std::cout << "SERVER_ERROR " << exception.what() << std::endl;
         std::stringstream server_ans_stream;
@@ -383,9 +382,11 @@ void Worker::EpollManager::ReadEvent(int socket) {
 
         event_connection.current_buffer_size_ = 0;
         event_connection.parsed_ = 0;
+        event_connection.parser_.Reset();
     }
 }
 
+// See Worker.h
 void Worker::EpollManager::WriteEvent(int socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
@@ -397,9 +398,7 @@ void Worker::EpollManager::WriteEvent(int socket) {
         wrote = WriteStrict_NonBlock(socket, cur_ans.c_str(), cur_ans.length() - event_connection.first_ans_bias_);
         if(wrote == -1){
             // Error occured in send call
-            connection_sockets_.erase(socket);
-            connections_.erase(socket);
-            close_socket(socket);
+            TerminateEvent(socket);
         } else if(wrote == cur_ans.length() - event_connection.first_ans_bias_){
             // send wrote all data without blocking, continue sending answers
             event_connection.first_ans_bias_ = 0;

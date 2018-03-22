@@ -28,8 +28,8 @@ namespace NonBlocking {
 class Worker {
 public:
     explicit Worker(std::shared_ptr<Afina::Storage> ps);
-    ~Worker();
-    Worker(const Worker& other) {this->ps_ = other.ps_;}
+
+    ~Worker() = default;
 
     /**
      * Spaws new background thread that is doing epoll on the given server
@@ -80,15 +80,18 @@ private:
 
         void WaitEvent();
 
+        void AcceptEvent();
+
+        void TerminateEvent(int socket, bool is_server = false);
+
         void ReadEvent(int socket);
 
         void WriteEvent(int socket);
 
-        void AcceptEvent();
     private:
         class Connection{
         public:
-            Connection(){};
+            Connection() = default;
         private:
             friend EpollManager;
             enum State{
@@ -133,7 +136,7 @@ private:
         };
 
         // -1 means infinity time of event waiting
-        static constexpr int max_timeout_{-1};
+        static constexpr int max_timeout_{10000};
 
         Worker *worker_;
         std::unordered_set<int> connection_sockets_;
