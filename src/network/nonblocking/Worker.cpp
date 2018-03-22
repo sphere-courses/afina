@@ -13,8 +13,14 @@ namespace Afina {
 namespace Network {
 namespace NonBlocking {
 
+char Worker::EpollManager::Connection::addition_[] = "\r\n";
+size_t Worker::EpollManager::Connection::addition_len_ = sizeof(addition_) - 1;
+
+
 // See Worker.h
 Worker::Worker(std::shared_ptr<Afina::Storage> ps) : ps_(ps) {}
+
+Worker::Worker(const Worker& other) : ps_(other.ps_) {}
 
 // See Worker.h
 void * Worker::RunOnRunProxy(void *proxy_args){
@@ -217,9 +223,6 @@ void Worker::EpollManager::TerminateEvent(int socket, bool is_server){
 void Worker::EpollManager::ReadEvent(int socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ <<  std::endl;
 
-    static char addition_[] = "\r\n";
-    static size_t addition_len_ = sizeof(addition_) - 1;
-
     Connection& event_connection = connections_[socket];
     if (event_connection.state_ != Connection::State::BLOCKON_RADD &&
         event_connection.state_ != Connection::State::BLOCKON_RDATA &&
@@ -334,20 +337,20 @@ void Worker::EpollManager::ReadEvent(int socket) {
 
             event_connection.state_ = Connection::State::BLOCKON_NONE;
 
-            if (event_connection.current_buffer_size_ < addition_len_) {
+            if (event_connection.current_buffer_size_ < event_connection.addition_len_) {
 
                 event_connection.state_ = Connection::State::BLOCKON_RADD;
 
                 event_connection.read_now_ = ReadStrict_NonBlock(socket,
                                                                  event_connection.buffer_ +
                                                                  event_connection.current_buffer_size_,
-                                                                 addition_len_ -
+                                                                 event_connection.addition_len_ -
                                                                  event_connection.current_buffer_size_);
                 if (event_connection.read_now_ == -1) {
                     TerminateEvent(socket);
                     return;
                 } else if (event_connection.read_now_ ==
-                           addition_len_ - event_connection.current_buffer_size_) {
+                           event_connection.addition_len_ - event_connection.current_buffer_size_) {
                     event_connection.state_ = Connection::State::BLOCKON_NONE;
                 } else {
                     // Not enough data in socket
@@ -355,13 +358,13 @@ void Worker::EpollManager::ReadEvent(int socket) {
                     event_connection.state_ = Connection::State::BLOCKON_RADD;
                     return;
                 }
-                event_connection.current_buffer_size_ = addition_len_;
+                event_connection.current_buffer_size_ = event_connection.addition_len_;
             }
 
-            if (strncmp(event_connection.buffer_, addition_, addition_len_) != 0) {
+            if (strncmp(event_connection.buffer_, event_connection.addition_, event_connection.addition_len_) != 0) {
                 throw std::runtime_error("Incorrect command format");
             }
-            event_connection.parsed_ = addition_len_;
+            event_connection.parsed_ = event_connection.addition_len_;
         }
 
         std::string server_ans;

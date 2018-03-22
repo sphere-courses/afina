@@ -29,6 +29,8 @@ class Worker {
 public:
     explicit Worker(std::shared_ptr<Afina::Storage> ps);
 
+    Worker(const Worker& other);
+
     ~Worker() = default;
 
     /**
@@ -89,12 +91,13 @@ private:
         void WriteEvent(int socket);
 
     private:
-        class Connection{
+        class Connection {
         public:
             Connection() = default;
+
         private:
             friend EpollManager;
-            enum State{
+            enum State {
                 BLOCKON_NONE,
                 BLOCKON_RCOM,
                 BLOCKON_RDATA,
@@ -106,11 +109,11 @@ private:
             size_t first_ans_bias_{0};
 
             // Fields describing current connection-parsing state
+
             static constexpr int max_buffer_size_{1024}, max_data_size_{1024};
 
-            // Delimiter
-            //static constexpr char * addition_ = "\r\n";
-            //static constexpr size_t addition_len_ = sizeof(addition_) - 1;
+            static char addition_[];
+            static size_t addition_len_;
 
             char buffer_[max_buffer_size_];
             char data_block_[max_data_size_];
@@ -127,6 +130,7 @@ private:
             size_t current_data_size_{0};
 
             std::shared_ptr<Execute::Command> command_;
+
         };
 
         static constexpr int max_events_{100};
