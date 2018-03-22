@@ -130,7 +130,10 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
         new_element.first->second = new_entry;
     } else {
         Entry *entry = element->second;
-        size_delta = value.size() - entry->GetValue().size();
+
+        if(value.size() > entry->GetValue().size()) {
+            size_delta = value.size() - entry->GetValue().size();
+        }
 
         if(!_release_space(size_delta)){
             return false;
@@ -181,7 +184,10 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
         return false;
     } else {
         Entry *entry = element->second;
-        size_delta = value.size() - entry->GetValue().size();
+
+        if(value.size() > entry->GetValue().size()) {
+            size_delta = value.size() - entry->GetValue().size();
+        }
 
         if(!_release_space(size_delta)){
             return false;
