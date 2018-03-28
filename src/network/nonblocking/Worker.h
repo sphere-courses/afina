@@ -11,6 +11,9 @@
 #include <sys/epoll.h>
 #include <protocol/Parser.h>
 #include <sstream>
+#include <cstdint>
+
+#include "EpollManager.h"
 
 namespace Afina {
 
@@ -20,6 +23,9 @@ class Storage;
 namespace Network {
 namespace NonBlocking {
 
+// Forward declaration, see EpollManager.h
+class EpollManager;
+
 /**
  * # Thread running epoll
  * On Start spaws background thread that is doing epoll on the given server
@@ -27,18 +33,20 @@ namespace NonBlocking {
  */
 class Worker {
 public:
-    explicit Worker(std::shared_ptr<Afina::Storage> ps);
+    friend EpollManager;
 
-    Worker(const Worker& other);
+    explicit Worker(std::shared_ptr<Afina::Storage> ps) noexcept ;
 
-    ~Worker() = default;
+    Worker(const Worker &other) noexcept ;
+
+    ~Worker() noexcept = default;
 
     /**
      * Spaws new background thread that is doing epoll on the given server
      * socket. Once connection accepted it must be registered and being processed
      * on this thread
      */
-    void Start(int server_socket);
+    void Start(int server_socket, int fifo_read_fd = -1, int fifo_write_fd = -1) throw() ;
 
     /**
      * Signal background thread to stop. After that signal thread must stop to
@@ -46,114 +54,35 @@ public:
      * all readed commands are executed and results are send back to client, thread
      * must stop
      */
-    void Stop();
+    void Stop() noexcept ;
 
     /**
      * Blocks calling thread until background one for this worker is actually
      * been destoryed
      */
-    void Join();
+    void Join() noexcept ;
+
+    std::atomic<bool> running_;
 
 protected:
     /**
      * Method executing by background thread
      */
-    void OnRun(int server_socket);
+    void OnRun(int server_socket, int fifo_read_fd, int fifo_write_fd) noexcept ;
 
 private:
-    static void * RunOnRunProxy(void *proxy_args);
+    static void *RunOnRunProxy(void *proxy_args) noexcept ;
 
 
     // Nested class to pass parameters of new connection through proxy function
-    class ProxyArgs{
+    class ProxyArgs {
     public:
         Worker *worker_;
         int socket_;
-    };
-
-
-    class EpollManager{
-    public:
-        explicit EpollManager(int server_socket, Worker *worker);
-
-        ~EpollManager();
-
-        void Stop();
-
-        void WaitEvent();
-
-        void AcceptEvent();
-
-        void TerminateEvent(int socket, bool is_server = false);
-
-        void ReadEvent(int socket);
-
-        void WriteEvent(int socket);
-
-    private:
-        class Connection {
-        public:
-            Connection() = default;
-
-        private:
-            friend EpollManager;
-            enum State {
-                BLOCKON_NONE,
-                BLOCKON_RCOM,
-                BLOCKON_RDATA,
-                BLOCKON_RADD
-            };
-
-            State state_{BLOCKON_NONE};
-            std::queue<std::string> answers_;
-            size_t first_ans_bias_{0};
-
-            // Fields describing current connection-parsing state
-
-            static constexpr int max_buffer_size_{1024}, max_data_size_{1024};
-
-            static char addition_[];
-            static size_t addition_len_;
-
-            char buffer_[max_buffer_size_];
-            char data_block_[max_data_size_];
-
-            size_t current_buffer_size_{0}, parsed_{0};
-
-            Protocol::Parser parser_;
-
-            size_t parsed_now_{0};
-            ssize_t read_now_{0};
-
-            uint32_t body_size_{0};
-
-            size_t current_data_size_{0};
-
-            std::shared_ptr<Execute::Command> command_;
-
-        };
-
-        static constexpr int max_events_{100};
-        // Due no support in Ubuntu 16.04 (old epoll.h, but kernel support this flag)
-        enum EPOLLFLAG{
-            EPOLLEXCLUSIVE = (1u << 28)
-        };
-
-        // -1 means infinity time of event waiting
-        static constexpr int max_timeout_{10000};
-
-        Worker *worker_;
-        std::unordered_set<int> connection_sockets_;
-        std::unordered_map<int, Connection> connections_;
-        epoll_event events_[max_events_];
-        int epoll_fd_;
-
-        //TODO: Make implementation without this field
-        int server_socket_;
+        int fifo_read_fd_, fifo_write_fd_;
     };
 
     pthread_t thread_;
-    std::atomic<bool> running_;
     std::shared_ptr<Afina::Storage> ps_;
     EpollManager *manager_;
 };

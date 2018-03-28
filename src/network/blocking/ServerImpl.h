@@ -22,10 +22,10 @@ class ServerImpl : public Server {
 public:
     explicit ServerImpl(std::shared_ptr<Afina::Storage> ps);
 
-    ~ServerImpl() = default;
+    ~ServerImpl() override = default;
 
     // See Server.h
-    void Start(uint32_t port, uint16_t workers) override;
+    void Start(uint16_t port, uint16_t workers) override;
 
     // See Server.h
     void Stop() override;
@@ -81,7 +81,7 @@ private:
     // Port to listen for new connections, permits access only from
     // inside of accept_thread
     // Read-only
-    uint32_t listen_port;
+    uint16_t listen_port;
 
     // Main (accepter) socket
     int server_socket;

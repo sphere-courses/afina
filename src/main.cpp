@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
         // and simplify validation below
         options.add_options()("s,storage", "Type of storage service to use", cxxopts::value<std::string>());
         options.add_options()("n,network", "Type of network service to use", cxxopts::value<std::string>());
+        options.add_options()("r,read_fifo", "Input fifo file name", cxxopts::value<std::string>());
+        options.add_options()("w,write_fifo", "Output fifo file name", cxxopts::value<std::string>());
         options.add_options()("h,help", "Print usage info");
         options.parse(argc, argv);
 
@@ -92,6 +94,16 @@ int main(int argc, char **argv) {
         throw std::runtime_error("Unknown network type");
     }
 
+    std::string input_fifo_file;
+    if(options.count("read_fifo") > 0){
+        input_fifo_file = options["read_fifo"].as<std::string>();
+    }
+
+    std::string output_fifo_file;
+    if(options.count("write_fifo") > 0){
+        output_fifo_file = options["write_fifo"].as<std::string>();
+    }
+
     // Init local loop. It will react to signals and performs some metrics collections. Each
     // subsystem is able to push metrics actively, but some metrics could be collected only
     // by polling, so loop here will does that work
@@ -116,6 +128,8 @@ int main(int argc, char **argv) {
     // Start services
     try {
         app.storage->Start();
+
+        app.server->AssignFifo(input_fifo_file, output_fifo_file);
         app.server->Start(8080);
 
         // Freeze current thread and process events
@@ -129,7 +143,7 @@ int main(int argc, char **argv) {
 
         std::cout << "Application stopped" << std::endl;
     } catch (std::exception &e) {
-        std::cerr << "Fatal error" << e.what() << std::endl;
+        std::cerr << "Fatal error: " << e.what() << std::endl;
     }
 
     return 0;

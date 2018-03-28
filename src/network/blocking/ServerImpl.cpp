@@ -25,7 +25,7 @@ namespace Blocking {
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
 
 // See Server.h
-void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
+void ServerImpl::Start(uint16_t port, uint16_t n_workers) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     // If a client closes a connection, this will generally produce a SIGPIPE
@@ -332,10 +332,7 @@ bool ServerImpl::WriteStrict(int con_socket, const char *source, size_t len){
 bool ServerImpl::IsConnectionActive(int con_socket) {
     // TODO: Find out better way to determine if the connection closed
     char test;
-    if(send(con_socket, &test, 1, MSG_NOSIGNAL) == -1){
-        return false;
-    }
-    return true;
+    return send(con_socket, &test, 1, MSG_NOSIGNAL) != -1;
 }
 
 // See Server.h

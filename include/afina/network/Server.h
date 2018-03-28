@@ -22,7 +22,7 @@ public:
      * listen on the given interface/port pair to process  incomming
      * data in workers number of threads
      */
-    virtual void Start(uint32_t port, uint16_t workers = 10) = 0;
+    virtual void Start(uint16_t port, uint16_t workers = 10) = 0;
 
     /**
      * Signal all worker threads that server is going to shutdown. After method returns
@@ -39,6 +39,11 @@ public:
      * will be released
      */
     virtual void Join() = 0;
+
+    /**
+     * Assign input-output fifo files to the server
+     */
+    virtual void AssignFifo(const std::string& fifo_read_file, const std::string& fifo_write_file) {};
 
 protected:
     /**
