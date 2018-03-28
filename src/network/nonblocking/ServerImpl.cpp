@@ -83,48 +83,12 @@ void ServerImpl::Start(uint16_t port, uint16_t n_workers) throw() {
         throw std::runtime_error("Socket listen() failed");
     }
 
-//    // Create read fifo file if necessary
-    int fifo_read_fd = -1;
-    if(fifo_read_file_.length()){
-        if(mkfifo(fifo_read_file_.c_str(), 0666) == -1){
-            close(server_socket_);
-            throw std::runtime_error("Fifo file mkfifo() failed. " + std::string(strerror(errno)));
-        }
-
-        if((fifo_read_fd = open(fifo_read_file_.c_str(), O_NONBLOCK | O_RDONLY)) == -1){
-            close(server_socket_);
-            throw std::runtime_error("Fifo file open() failed. " + std::string(strerror(errno)));
-        }
-
-        make_socket_non_blocking(fifo_read_fd);
-    }
-
-//    // Create write fifo file if necessary
-      int fifo_write_fd = -1;
-    if(fifo_write_file_.length()){
-
-        if(mkfifo(fifo_write_file_.c_str(), 0666) == -1){
-            close(server_socket_);
-            throw std::runtime_error("Fifo file mkfifo() failed. " + std::string(strerror(errno)));
-        }
-
-        // Non blocking variant is forbidden, process must wait
-        // until reader will connect to the other side of fifo file
-        if((fifo_write_fd = open(fifo_write_file_.c_str(), O_WRONLY)) == -1){
-            close(server_socket_);
-            throw std::runtime_error("Fifo file open() failed. " + std::string(strerror(errno)));
-        }
-
-        make_socket_non_blocking(fifo_write_fd);
-    }
-
-
     for (int i = 0; i < n_workers; i++) {
         auto new_worker = workers_.insert(new Worker(pStorage));
 
         // TODO: Prepare more than one pair of read-write fifo files (divide pairs between workers)
         // Assign fifo files to only one worker
-        (*new_worker.first)->Start(server_socket_, (i == 0 ? fifo_read_fd : -1), (i == 0 ? fifo_write_fd : -1));
+        (*new_worker.first)->Start(server_socket_, (i == 0 ? fifo_read_file_ : ""), (i == 0 ? fifo_write_file_ : ""));
     }
 }
 

@@ -4,6 +4,8 @@
 #include <sys/socket.h>
 #include <cstring>
 #include <afina/execute/Command.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "EpollManager.h"
 #include "Utils.h"
@@ -27,10 +29,10 @@ Connection::Connection(int descriptor) noexcept : descriptor_{descriptor} {}
 ssize_t Connection::WriteToStrict_NonBlock(const char *source, size_t len) noexcept {
     ssize_t wrote_now{0};
     size_t wrote{0};
-    while(wrote < len){
+    while (wrote < len) {
         // MSG_DONTWAIT is omitted due to nonblocking socket
-        if((wrote_now = this->WriteTo_NonBlock(source + wrote, len - wrote)) == -1){
-            if(errno == EAGAIN || errno == EWOULDBLOCK){
+        if ((wrote_now = this->WriteTo_NonBlock(source + wrote, len - wrote)) == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return wrote;
             }
             std::cout << "send error: " << std::string(strerror(errno)) << std::endl;
@@ -50,18 +52,27 @@ ssize_t Connection::ReadFromStrict_NonBlock(char *dest, size_t len) noexcept {
         // MSG_DONTWAIT is omitted due to nonblocking socket
         read_now = this->ReadFrom_NonBlock(dest + read, len - read);
         if (read_now == -1) {
-            if(errno == EAGAIN || errno == EWOULDBLOCK){
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return read;
             }
             std::cout << "resv error: " << std::string(strerror(errno)) << std::endl;
             return -1;
-        } else if(read_now == 0){
-            return -1;
+        } else if (read_now == 0) {
+            return 0;
         } else {
             read += read_now;
         }
     }
     return read;
+}
+
+
+// See EpollManager.h
+ServerSocketConnection::ServerSocketConnection(int server_socket) noexcept : Connection(server_socket) {}
+
+// See EpollManager.h
+int ServerSocketConnection::AcceptOn() noexcept {
+    return accept(descriptor_, nullptr, nullptr);
 }
 
 
@@ -86,8 +97,31 @@ void SocketConnection::CloseConn() noexcept {
 
 
 // See EpollManager.h
-FifoConnection::FifoConnection(int fifo_fd, FifoConnection::FifoType type, int other_leg) noexcept :
-        Connection(fifo_fd), type_{type}, other_leg_{other_leg} {};
+FifoConnection::FifoConnection(const std::string& fifo_path, FifoConnection::FifoType type, int other_leg) noexcept :
+        fifo_path_{fifo_path}, type_{type}, other_leg_{other_leg} {};
+
+// See EpollManager.h
+void FifoConnection::OpenConn() throw() {
+    if(mkfifo(fifo_path_.c_str(), 0666) == -1){
+        if(errno != EEXIST) {
+            throw std::runtime_error("Fifo file mkfifo() failed. " + std::string(strerror(errno)));
+        }
+    }
+
+    int flags = O_NONBLOCK;
+    if(type_ == FifoConnection::FifoType::FIFO_READ){
+        flags |= O_RDONLY;
+    } else if (type_ == FifoConnection::FifoType::FIFO_WRITE){
+        flags |= O_WRONLY;
+    } else {
+        flags |= O_RDWR;
+    }
+    if((descriptor_ = open(fifo_path_.c_str(), flags)) == -1){
+        throw std::runtime_error("Fifo file open() failed. " + std::string(strerror(errno)));
+    }
+
+    make_socket_non_blocking(descriptor_);
+}
 
 // See EpollManager.h
 ssize_t FifoConnection::WriteTo_NonBlock(const char *source, size_t len) noexcept {
@@ -106,9 +140,12 @@ void FifoConnection::CloseConn() noexcept {
 
 
 // See EpollManager.h
-EpollManager::EpollManager(int server_socket, int fifo_read_fd, int fifo_write_fd, Worker *worker) throw() :
-        server_socket_(server_socket), worker_{worker}{
+EpollManager::EpollManager(int server_socket, const std::string& fifo_read_path, const std::string& fifo_write_path, Worker *worker) throw() : worker_{
+        worker} {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
+    connections_fd_.insert(server_socket);
+    connections_[server_socket] = new ServerSocketConnection(server_socket);
 
     // Since UNIX kernel 2.6.7 it is okay to pass any positive size_t argument
     // to epoll_create with no difference
@@ -124,10 +161,19 @@ EpollManager::EpollManager(int server_socket, int fifo_read_fd, int fifo_write_f
     server_event.data.fd = server_socket;
 
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_socket, &server_event) == -1) {
+        delete connections_[server_socket];
+        delete events_;
         throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
     }
 
-    AddFifoPair(fifo_read_fd, fifo_write_fd);
+    try {
+        AddFifoPair(fifo_read_path, fifo_write_path);
+    } catch (...){
+        delete connections_[server_socket];
+        delete events_;
+        throw;
+    }
+
 }
 
 
@@ -158,98 +204,98 @@ void EpollManager::WaitEvent() throw() {
     int event_socket;
 
     if ((events_num = epoll_pwait(epoll_fd_, events_, max_events_, max_timeout_, nullptr)) == -1) {
-        if(errno == EINTR){
+        if (errno == EINTR) {
             return;
         }
         throw std::runtime_error("epoll_wait: " + std::string(strerror(errno)));
     }
     for (int i = 0; i < events_num; ++i) {
         event_socket = events_[i].data.fd;
+        Connection *connection = connections_[event_socket];
 
-        if (event_socket == server_socket_) {
-
+        if (typeid(*connection) == typeid(ServerSocketConnection)) {
             // Event on server socket
+            auto serv_conn = dynamic_cast<ServerSocketConnection *>(connection);
+
             if (events_[i].events & EPOLLERR) {
                 std::cout << "Error happened on server socket. Client sockets are monitored" << std::endl;
-                TerminateServerEvent(server_socket_);
+                TerminateEvent(serv_conn);
             } else if (events_[i].events & EPOLLHUP) {
                 std::cout << "Server socket closed connection. Client sockets are monitored" << std::endl;
-                TerminateServerEvent(server_socket_);
+                TerminateEvent(serv_conn);
             } else if (events_[i].events & EPOLLIN) {
-                AcceptEvent();
+                AcceptEvent(serv_conn);
             } else {
                 //TODO: is server socket valid after signaled unknown event
                 std::cout << "Unknown event happened on server socket. Client sockets are monitored" << std::endl;
             }
 
-        } else {
+        } else if (typeid(*connection) == typeid(SocketConnection)) {
+            // Event on client socket
 
-            // Event on connection
-            if(typeid(*connections_[event_socket]) == typeid(FifoConnection)){
-
-                if (events_[i].events & EPOLLERR) {
-                    std::cout << "Error happened on client socket" << std::endl;
-                    TerminateEvent(event_socket);
-                    continue;
-                }
-                if (events_[i].events & EPOLLHUP) {
-                    std::cout << "Client socket close connection" << std::endl;
-                    TerminateEvent(event_socket);
-                    AddFifoPair(event_socket, -1);
-                    // TODO: Reinitialate connection
-                    // !!! INCORRECT !!!
-                    // Do nothing because corresponding file descriptor is fifo file and
-                    // EPOLLHUB merely indicates that client closed its end of the connection
-                }
-                // We ought to read all data placed in file even if client closed its end of the connection
+            if (events_[i].events & EPOLLERR) {
+                std::cout << "Error happened on client socket" << std::endl;
+                TerminateEvent(connection);
+            } else if (events_[i].events & EPOLLHUP) {
+                std::cout << "Client socket close connection" << std::endl;
+                TerminateEvent(connection);
+            } else {
                 if (connections_fd_.count(event_socket) != 0 &&
                     events_[i].events & EPOLLIN) {
-                    ReadEvent(event_socket);
+                    ReadEvent(connection);
                 }
                 if (connections_.count(event_socket) != 0 &&
                     events_[i].events & EPOLLOUT) {
-                    WriteEvent(event_socket);
+                    WriteEvent(connection);
                 }
-                if (!(events_[i].events & EPOLLIN) && !(events_[i].events & EPOLLOUT) && !(events_[i].events & EPOLLHUP)) {
+                if (!(events_[i].events & EPOLLIN) && !(events_[i].events & EPOLLOUT)) {
                     //TODO: is client socket valid after signaled unknown event
                     std::cout << "Unknown event happened on client socket" << std::endl;
                 }
-
-            } else {
-
-                if (events_[i].events & EPOLLERR) {
-                    std::cout << "Error happened on client socket" << std::endl;
-                    TerminateEvent(event_socket);
-                } else if (events_[i].events & EPOLLHUP) {
-                    std::cout << "Client socket close connection" << std::endl;
-                    TerminateEvent(event_socket);
-                } else {
-                    if (connections_fd_.count(event_socket) != 0 &&
-                        events_[i].events & EPOLLIN) {
-                        ReadEvent(event_socket);
-                    }
-                    if (connections_.count(event_socket) != 0 &&
-                        events_[i].events & EPOLLOUT) {
-                        WriteEvent(event_socket);
-                    }
-                    if (!(events_[i].events & EPOLLIN) && !(events_[i].events & EPOLLOUT)) {
-                        //TODO: is client socket valid after signaled unknown event
-                        std::cout << "Unknown event happened on client socket" << std::endl;
-                    }
-                }
-
             }
+
+        } else if (typeid(*connections_[event_socket]) == typeid(FifoConnection)) {
+            // Event in fifo file
+
+            if (events_[i].events & EPOLLERR) {
+                std::cout << "Error happened in fifo file" << std::endl;
+                TerminateEvent(connection);
+                continue;
+            }
+            // We ought to read all data placed in file even if
+            // client closed its end of the connection (i.e. EPOLLHUP came)
+            if (events_[i].events & EPOLLIN) {
+                ReadEvent(connection);
+            }
+
+            // EPOLLHUB merely indicates that client closed its end of the connection
+            // so we ought to close connection and than connect again
+            if (events_[i].events & EPOLLHUP) {
+                std::cout << "Client closed its end of the connection" << std::endl;
+
+                // Reinitialate connection (continue monitoring fifo file)
+                ReconnectEvent(connection);
+                continue;
+            }
+            if (events_[i].events & EPOLLOUT) {
+                WriteEvent(connection);
+            }
+            if (!(events_[i].events & EPOLLIN) && !(events_[i].events & EPOLLOUT) && !(events_[i].events & EPOLLHUP)) {
+                //TODO: is client socket valid after signaled unknown event
+                std::cout << "Unknown event happened on client socket" << std::endl;
+            }
+
         }
     }
 }
 
 // See EpollManager.h
-void EpollManager::AcceptEvent() throw() {
+void EpollManager::AcceptEvent(ServerSocketConnection *connection) throw() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     int new_socket;
-    if ((new_socket = accept(server_socket_, nullptr, nullptr)) == -1) {
-        TerminateServerEvent(server_socket_);
+    if ((new_socket = connection->AcceptOn()) == -1) {
+        TerminateEvent(connection);
         //TODO: can we continue EpollManager?
         throw std::runtime_error("server_socket: " + std::string(strerror(errno)));
     }
@@ -269,7 +315,7 @@ void EpollManager::AcceptEvent() throw() {
 }
 
 // See EpollManager.h
-void EpollManager::AddFifoPair(int fifo_read_fd, int fifo_write_fd) throw() {
+void EpollManager::AddFifoPair(const std::string& fifo_read_path, const std::string& fifo_write_path) throw() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     // fifo_..._fd - already non blocking fifo file descriptor
@@ -277,41 +323,68 @@ void EpollManager::AddFifoPair(int fifo_read_fd, int fifo_write_fd) throw() {
     // EPOLLERR, EPOLLHUP - are always monitored
     epoll_event fifo_event;
 
+    FifoConnection *read_fifo_conn = nullptr;
+    FifoConnection *write_fifo_conn = nullptr;
+
     // Add input fifo file to monitoring if necessary
-    if (fifo_read_fd != -1) {
-        connections_fd_.insert(fifo_read_fd);
-        connections_[fifo_read_fd] = new FifoConnection(fifo_read_fd, FifoConnection::FifoType::FIFO_READ, fifo_write_fd);
+    if (fifo_read_path.length()) {
+        read_fifo_conn = new FifoConnection(fifo_read_path, FifoConnection::FifoType::FIFO_READ, -1);
+        try {
+            read_fifo_conn->OpenConn();
+        } catch (...){
+            delete read_fifo_conn;
+            throw;
+        }
+
+        connections_fd_.insert(read_fifo_conn ->descriptor_);
+        connections_[read_fifo_conn->descriptor_] = read_fifo_conn ;
+
 
         fifo_event.events = EPOLLIN;
-        fifo_event.data.fd = fifo_read_fd;
+        fifo_event.data.fd = read_fifo_conn ->descriptor_;
 
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fifo_read_fd, &fifo_event) == -1) {
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, read_fifo_conn->descriptor_, &fifo_event) == -1) {
+            delete read_fifo_conn;
             throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
         }
     }
 
     // Add output fifo file to monitoring if necessary
-    if (fifo_write_fd != -1) {
-        connections_fd_.insert(fifo_write_fd);
-        connections_[fifo_write_fd] = new FifoConnection(fifo_write_fd, FifoConnection::FifoType::FIFO_WRITE, fifo_read_fd);
+    if (fifo_write_path.length()) {
+        write_fifo_conn = new FifoConnection(fifo_write_path, FifoConnection::FifoType::FIFO_WRITE, -1);
+        try {
+            write_fifo_conn->OpenConn();
+        } catch (...){
+            delete write_fifo_conn;
+            throw;
+        }
 
-        fifo_event.events = EPOLLOUT;
-        fifo_event.data.fd = fifo_write_fd;
+        connections_fd_.insert(write_fifo_conn->descriptor_);
+        connections_[write_fifo_conn->descriptor_] = write_fifo_conn;
 
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fifo_write_fd, &fifo_event) == -1) {
+
+        fifo_event.events = EPOLLIN;
+        fifo_event.data.fd = write_fifo_conn->descriptor_;
+
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, write_fifo_conn->descriptor_, &fifo_event) == -1) {
+            delete write_fifo_conn;
             throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
         }
     }
+
+    if(read_fifo_conn != nullptr && write_fifo_conn != nullptr){
+        read_fifo_conn->other_leg_ = write_fifo_conn->descriptor_;
+        write_fifo_conn->other_leg_ = read_fifo_conn->descriptor_;
+    }
+
 }
 
 // See EpollManager.h
-void EpollManager::TerminateEvent(int descriptor) throw() {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+void EpollManager::TerminateEvent(Connection *connection) throw() {
 
-    Connection *connection = connections_[descriptor];
-
-    auto fifo_conn = dynamic_cast<FifoConnection *>(connection);
-    if(fifo_conn != nullptr){
+    // Part applied only for fifo files
+    if(typeid(*connection) == typeid(FifoConnection)){
+        auto fifo_conn = dynamic_cast<FifoConnection *>(connection);
         // If other leg exists yet "break" connection with closing leg
         if(fifo_conn->other_leg_ != -1){
             auto other_leg = dynamic_cast<FifoConnection *>(connections_[fifo_conn->other_leg_]);
@@ -319,236 +392,321 @@ void EpollManager::TerminateEvent(int descriptor) throw() {
         }
     }
 
-    connections_fd_.erase(descriptor);
-    connections_.erase(descriptor);
+    // Part applied only for fifo files and client sockets
+    if(typeid(*connection) == typeid(SocketConnection) ||
+       typeid(*connection) == typeid(FifoConnection)) {
+        connections_fd_.erase(connection->descriptor_);
+        connections_.erase(connection->descriptor_);
+    }
 
     // Warning! Set event to nullptr is error before kernel 2.6.9
-    if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, descriptor, nullptr) == -1) {
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, connection->descriptor_, nullptr) == -1) {
         std::cout << std::string(strerror(errno));
         throw std::runtime_error("epoll_ctl: ");// + std::string(strerror(errno)));
     }
 
-    connection->CloseConn();
+    // Part applied only for fifo files and client sockets
+    // Because server sockets are shared resource between different workers
+    if(typeid(*connection) == typeid(SocketConnection) ||
+       typeid(*connection) == typeid(FifoConnection)) {
+        connection->CloseConn();
+    }
+    
     delete connection;
 }
 
 // See EpollManager.h
-void EpollManager::TerminateServerEvent(int server_sock) throw() {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+void EpollManager::ReconnectEvent(Connection *connection) throw() {
 
-    // Warning! Set event to nullptr is error before kernel 2.6.9
-    if(epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, server_sock, nullptr) == -1){
-        throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
+    // Part applied only for fifo files
+    if(typeid(*connection) == typeid(FifoConnection)) {
+        auto fifo_conn = dynamic_cast<FifoConnection *>(connection);
+
+        FifoConnection *other_leg = nullptr;
+        // If other leg exists yet "break" connection with closing leg
+        if (fifo_conn->other_leg_ != -1) {
+            other_leg = dynamic_cast<FifoConnection *>(connections_[fifo_conn->other_leg_]);
+            other_leg->other_leg_ = -1;
+        }
+
+        connections_fd_.erase(fifo_conn->descriptor_);
+        connections_.erase(fifo_conn->descriptor_);
+
+        // Warning! Set event to nullptr is error before kernel 2.6.9
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fifo_conn->descriptor_, nullptr) == -1) {
+            std::cout << std::string(strerror(errno));
+            throw std::runtime_error("epoll_ctl: ");// + std::string(strerror(errno)));
+        }
+
+        fifo_conn->CloseConn();
+
+        fifo_conn->OpenConn();
+
+        connections_fd_.insert(fifo_conn ->descriptor_);
+        connections_[fifo_conn->descriptor_] = fifo_conn;
+
+        epoll_event fifo_event;
+        if(fifo_conn->type_ == FifoConnection::FifoType::FIFO_READ){
+            fifo_event.events = EPOLLIN;
+        } else if(fifo_conn->type_ == FifoConnection::FifoType::FIFO_WRITE){
+            fifo_event.events = EPOLLOUT;
+        } else {
+            fifo_event.events = EPOLLIN | EPOLLOUT;
+        }
+        fifo_event.data.fd = fifo_conn->descriptor_;
+
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fifo_conn->descriptor_, &fifo_event) == -1) {
+            throw std::runtime_error("epoll_ctl: " + std::string(strerror(errno)));
+        }
+
+        if(other_leg != nullptr){
+            other_leg->other_leg_ = fifo_conn->descriptor_;
+        }
     }
+
 }
 
 // See EpollManager.h
-void EpollManager::ReadEvent(int descriptor) throw() {
+void EpollManager::ReadEvent(Connection *connection) throw() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
-    Connection *event_connection = connections_[descriptor];
-    if (event_connection->state_ != Connection::State::BLOCKON_RADD &&
-        event_connection->state_ != Connection::State::BLOCKON_RDATA &&
-        event_connection->state_ != Connection::State::BLOCKON_RCOM &&
-        event_connection->state_ != Connection::State::BLOCKON_NONE) {
+    if (connection->state_ != Connection::State::BLOCKON_RADD &&
+        connection->state_ != Connection::State::BLOCKON_RDATA &&
+        connection->state_ != Connection::State::BLOCKON_RCOM &&
+        connection->state_ != Connection::State::BLOCKON_NONE) {
         throw std::runtime_error("Connection in inconsistent state");
     }
 
     if (!worker_->running_.load()) {
-        TerminateEvent(descriptor);
+        TerminateEvent(connection);
         return;
     }
 
     try {
-        if (event_connection->state_ == Connection::State::BLOCKON_NONE ||
-            event_connection->state_ == Connection::State::BLOCKON_RCOM) {
-            event_connection->parsed_now_ = 0;
-            event_connection->read_now_ = 0;
-            while (!event_connection->parser_.Parse(event_connection->buffer_ + event_connection->parsed_,
-                                                   event_connection->current_buffer_size_ - event_connection->parsed_,
-                                                   event_connection->parsed_now_)) {
-                event_connection->parsed_ += event_connection->parsed_now_;
+        if (connection->state_ == Connection::State::BLOCKON_NONE ||
+            connection->state_ == Connection::State::BLOCKON_RCOM) {
+            connection->parsed_now_ = 0;
+            connection->read_now_ = 0;
+            while (!connection->parser_.Parse(connection->buffer_ + connection->parsed_,
+                                                   connection->current_buffer_size_ - connection->parsed_,
+                                                   connection->parsed_now_)) {
+                connection->parsed_ += connection->parsed_now_;
 
-                if (event_connection->state_ == Connection::State::BLOCKON_NONE) {
-                    if (event_connection->current_buffer_size_ == event_connection->max_buffer_size_) {
-                        event_connection->parsed_ = 0;
-                        event_connection->current_buffer_size_ = 0;
+                if (connection->state_ == Connection::State::BLOCKON_NONE) {
+                    if (connection->current_buffer_size_ == connection->max_buffer_size_) {
+                        connection->parsed_ = 0;
+                        connection->current_buffer_size_ = 0;
                     }
                 }
 
-                event_connection->read_now_ = event_connection->ReadFrom_NonBlock(
-                        event_connection->buffer_ + event_connection->current_buffer_size_,
-                        event_connection->max_buffer_size_ - event_connection->current_buffer_size_);
+                connection->read_now_ = connection->ReadFrom_NonBlock(
+                        connection->buffer_ + connection->current_buffer_size_,
+                        connection->max_buffer_size_ - connection->current_buffer_size_);
 
-                if (event_connection->read_now_ == -1) {
+                if (connection->read_now_ == -1) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        event_connection->state_ = Connection::State::BLOCKON_RCOM;
+                        connection->state_ = Connection::State::BLOCKON_RCOM;
                         return;
                     }
                     std::cout << "recv error: " << std::string(strerror(errno)) << std::endl;
-                    TerminateEvent(descriptor);
+                    TerminateEvent(connection);
                     return;
-                } else if (event_connection->read_now_ == 0) {
-                    TerminateEvent(descriptor);
+                } else if (connection->read_now_ == 0) {
+                    // In all connection variants (either socket or fifo) this place
+                    // is reached when client orderly closed connection.
+                    // Somehow we may try to reestablish connection, but of socket case it quet hard
+                    // so reestablishing is avalible only for fifo files
+                    if(typeid(*connection) == typeid(FifoConnection)){
+                        connection->state_ = Connection::State::BLOCKON_RCOM;
+                        return;
+                        // Reconnection are to be performed in EPOLLHUP handler
+                    }
+                    TerminateEvent(connection);
                     return;
                 } else {
-                    event_connection->current_buffer_size_ += event_connection->read_now_;
+                    connection->current_buffer_size_ += connection->read_now_;
                 }
             }
-            event_connection->parsed_ += event_connection->parsed_now_;
+            connection->parsed_ += connection->parsed_now_;
 
 
-            event_connection->command_ = std::move(
-                    std::shared_ptr<Execute::Command>(event_connection->parser_.Build(event_connection->body_size_)));
-            if (event_connection->body_size_ > event_connection->max_data_size_) {
+            connection->command_ = std::move(
+                    std::shared_ptr<Execute::Command>(connection->parser_.Build(connection->body_size_)));
+            if (connection->body_size_ > connection->max_data_size_) {
                 throw std::runtime_error("Too long data_block");
-            } else if (event_connection->body_size_ == 0) {
-                event_connection->current_buffer_size_ =
-                        event_connection->current_buffer_size_ - event_connection->parsed_;
-                memmove(event_connection->buffer_,
-                        event_connection->buffer_ + event_connection->parsed_,
-                        event_connection->current_buffer_size_);
-                event_connection->parsed_ = 0;
-                event_connection->state_ = Connection::State::BLOCKON_NONE;
+            } else if (connection->body_size_ == 0) {
+                connection->current_buffer_size_ =
+                        connection->current_buffer_size_ - connection->parsed_;
+                memmove(connection->buffer_,
+                        connection->buffer_ + connection->parsed_,
+                        connection->current_buffer_size_);
+                connection->parsed_ = 0;
+                connection->state_ = Connection::State::BLOCKON_NONE;
             } else {
-                event_connection->current_data_size_ = std::min(
-                        event_connection->current_buffer_size_ - event_connection->parsed_,
-                        static_cast<size_t >(event_connection->body_size_));
+                connection->current_data_size_ = std::min(
+                        connection->current_buffer_size_ - connection->parsed_,
+                        static_cast<size_t >(connection->body_size_));
 
-                event_connection->current_buffer_size_ =
-                        event_connection->current_buffer_size_ - event_connection->parsed_ -
-                        event_connection->current_data_size_;
+                connection->current_buffer_size_ =
+                        connection->current_buffer_size_ - connection->parsed_ -
+                        connection->current_data_size_;
 
-                std::memcpy(event_connection->data_block_,
-                            event_connection->buffer_ + event_connection->parsed_,
-                            event_connection->current_data_size_);
+                std::memcpy(connection->data_block_,
+                            connection->buffer_ + connection->parsed_,
+                            connection->current_data_size_);
 
-                std::memmove(event_connection->buffer_,
-                             event_connection->buffer_ + event_connection->parsed_ + event_connection->current_data_size_,
-                             event_connection->current_buffer_size_);
+                std::memmove(connection->buffer_,
+                             connection->buffer_ + connection->parsed_ + connection->current_data_size_,
+                             connection->current_buffer_size_);
 
 
-                event_connection->state_ = Connection::State::BLOCKON_RDATA;
+                connection->state_ = Connection::State::BLOCKON_RDATA;
                 // Continue in Connection::State::BLOCKON_RDATA
             }
         }
-        if (event_connection->state_ == Connection::State::BLOCKON_RDATA) {
+        if (connection->state_ == Connection::State::BLOCKON_RDATA) {
 
-            event_connection->read_now_ = event_connection->ReadFromStrict_NonBlock(
-                    event_connection->data_block_ + event_connection->current_data_size_,
-                    event_connection->body_size_ - event_connection->current_data_size_);
+            connection->read_now_ = connection->ReadFromStrict_NonBlock(
+                    connection->data_block_ + connection->current_data_size_,
+                    connection->body_size_ - connection->current_data_size_);
 
-            if (event_connection->read_now_ == -1) {
-                TerminateEvent(descriptor);
+            if (connection->read_now_ == -1) {
+                TerminateEvent(connection);
                 return;
-            } else if (event_connection->read_now_ ==
-                       event_connection->body_size_ - event_connection->current_data_size_) {
-                event_connection->state_ = Connection::State::BLOCKON_RADD;
+            } else if (connection->read_now_ ==
+                       connection->body_size_ - connection->current_data_size_) {
+                connection->state_ = Connection::State::BLOCKON_RADD;
                 // Continue in Connection::State::BLOCKON_RADD
+            } else if(connection->read_now_ == 0) {
+                // In all connection variants (either socket or fifo) this place
+                // is reached when client orderly closed connection.
+                // Somehow we may try to reestablish connection, but of socket case it quet hard
+                // so reestablishing is avalible only for fifo files
+                if(typeid(*connection) == typeid(FifoConnection)){
+                    connection->state_ = Connection::State::BLOCKON_RDATA;
+                    return;
+                    // Reconnection are to be performed in EPOLLHUP handler
+                }
+                TerminateEvent(connection);
+                return;
             } else {
                 // Not enough data in socket
-                event_connection->current_data_size_ -= event_connection->read_now_;
-                event_connection->state_ = Connection::State::BLOCKON_RDATA;
+                connection->current_data_size_ -= connection->read_now_;
+                connection->state_ = Connection::State::BLOCKON_RDATA;
                 return;
             }
 
         }
 
-        if (event_connection->state_ == Connection::State::BLOCKON_RADD) {
+        if (connection->state_ == Connection::State::BLOCKON_RADD) {
 
-            event_connection->state_ = Connection::State::BLOCKON_NONE;
+            connection->state_ = Connection::State::BLOCKON_NONE;
 
-            if (event_connection->current_buffer_size_ < event_connection->addition_len_) {
+            if (connection->current_buffer_size_ < connection->addition_len_) {
 
-                event_connection->state_ = Connection::State::BLOCKON_RADD;
+                connection->state_ = Connection::State::BLOCKON_RADD;
 
-                event_connection->read_now_ = event_connection->ReadFromStrict_NonBlock(
-                        event_connection->buffer_ + event_connection->current_buffer_size_,
-                        event_connection->addition_len_ - event_connection->current_buffer_size_);
+                connection->read_now_ = connection->ReadFromStrict_NonBlock(
+                        connection->buffer_ + connection->current_buffer_size_,
+                        connection->addition_len_ - connection->current_buffer_size_);
 
-                if (event_connection->read_now_ == -1) {
-                    TerminateEvent(descriptor);
+                if (connection->read_now_ == -1) {
+                    TerminateEvent(connection);
                     return;
-                } else if (event_connection->read_now_ ==
-                           event_connection->addition_len_ - event_connection->current_buffer_size_) {
-                    event_connection->state_ = Connection::State::BLOCKON_NONE;
+                } else if (connection->read_now_ ==
+                           connection->addition_len_ - connection->current_buffer_size_) {
+                    connection->state_ = Connection::State::BLOCKON_NONE;
+                } else if(connection->read_now_ == 0){
+                    // In all connection variants (either socket or fifo) this place
+                    // is reached when client orderly closed connection.
+                    // Somehow we may try to reestablish connection, but of socket case it quet hard
+                    // so reestablishing is avalible only for fifo files
+                    if(typeid(*connection) == typeid(FifoConnection)){
+                        connection->state_ = Connection::State::BLOCKON_RADD;
+                        return;
+                        // Reconnection are to be performed in EPOLLHUP handler
+                    }
+                    TerminateEvent(connection);
+                    return;
                 } else {
                     // Not enough data in socket
-                    event_connection->current_buffer_size_ -= event_connection->read_now_;
-                    event_connection->state_ = Connection::State::BLOCKON_RADD;
+                    connection->current_buffer_size_ -= connection->read_now_;
+                    connection->state_ = Connection::State::BLOCKON_RADD;
                     return;
                 }
-                event_connection->current_buffer_size_ = event_connection->addition_len_;
+                connection->current_buffer_size_ = connection->addition_len_;
             }
 
-            if (strncmp(event_connection->buffer_, event_connection->addition_, event_connection->addition_len_) != 0) {
+            if (strncmp(connection->buffer_, connection->addition_, connection->addition_len_) != 0) {
                 throw std::runtime_error("Incorrect command format");
             }
-            event_connection->parsed_ = event_connection->addition_len_;
+            connection->parsed_ = connection->addition_len_;
         }
 
         std::string server_ans;
-        event_connection->command_->Execute(*(worker_->ps_),
-                                           std::string(event_connection->data_block_, event_connection->body_size_),
+        connection->command_->Execute(*(worker_->ps_),
+                                           std::string(connection->data_block_, connection->body_size_),
                                            server_ans);
-        if(typeid(*event_connection) == typeid(FifoConnection)){
-            auto fifo_conn = dynamic_cast<FifoConnection *>(event_connection);
+        if(typeid(*connection) == typeid(FifoConnection)){
+            auto fifo_conn = dynamic_cast<FifoConnection *>(connection);
             if(fifo_conn->other_leg_ != -1){
                 // Important that other_leg_ field always in consistent state
                 auto other_leg = dynamic_cast<FifoConnection *>(connections_[fifo_conn->other_leg_]);
                 other_leg->answers_.push(server_ans + "\r\n");
-                WriteEvent(fifo_conn->other_leg_);
+                WriteEvent(other_leg);
             }
         } else {
-            event_connection->answers_.push(server_ans + "\r\n");
-            WriteEvent(descriptor);
+            connection->answers_.push(server_ans + "\r\n");
+            WriteEvent(connection);
         }
-        event_connection->parser_.Reset();
+        connection->parser_.Reset();
+        if(connection->current_buffer_size_ - connection->parsed_ > 0){
+            ReadEvent(connection);
+        }
     } catch (std::exception &exception) {
         std::cout << "SERVER_ERROR " << exception.what() << std::endl;
         std::stringstream server_ans_stream;
         server_ans_stream << "SERVER_ERROR " << exception.what() << '\r' << '\n';
         std::string server_ans = server_ans_stream.str();
 
-        if(typeid(*event_connection) == typeid(FifoConnection)){
-            auto fifo_conn = dynamic_cast<FifoConnection *>(event_connection);
+        if(typeid(*connection) == typeid(FifoConnection)){
+            auto fifo_conn = dynamic_cast<FifoConnection *>(connection);
             if(fifo_conn->other_leg_ != -1){
                 // Important that other_leg_ field always in consistent state
                 auto other_leg = dynamic_cast<FifoConnection *>(connections_[fifo_conn->other_leg_]);
                 other_leg->answers_.push(server_ans);
-                WriteEvent(fifo_conn->other_leg_);
+                WriteEvent(other_leg);
             }
         } else {
-            event_connection->answers_.push(server_ans);
-            WriteEvent(descriptor);
+            connection->answers_.push(server_ans);
+            WriteEvent(connection);
         }
 
-        event_connection->current_buffer_size_ = 0;
-        event_connection->parsed_ = 0;
-        event_connection->parser_.Reset();
+        connection->current_buffer_size_ = 0;
+        connection->parsed_ = 0;
+        connection->parser_.Reset();
     }
 }
 
 // See EpollManager.h
-void EpollManager::WriteEvent(int descriptor) noexcept {
+void EpollManager::WriteEvent(Connection *connection) noexcept {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
-    Connection *event_connection = connections_[descriptor];
     ssize_t wrote{0};
 
-    while (!event_connection->answers_.empty()) {
-        std::string &cur_ans = event_connection->answers_.front();
-        wrote = event_connection->WriteToStrict_NonBlock(cur_ans.c_str(), cur_ans.length() - event_connection->first_ans_bias_);
+    while (!connection->answers_.empty()) {
+        std::string &cur_ans = connection->answers_.front();
+        wrote = connection->WriteToStrict_NonBlock(cur_ans.c_str(), cur_ans.length() - connection->first_ans_bias_);
         if (wrote == -1) {
             // Error occured in send call
-            TerminateEvent(descriptor);
-        } else if (wrote == cur_ans.length() - event_connection->first_ans_bias_) {
+            TerminateEvent(connection);
+        } else if (wrote == cur_ans.length() - connection->first_ans_bias_) {
             // send wrote all data without blocking, continue sending answers
-            event_connection->first_ans_bias_ = 0;
-            event_connection->answers_.pop();
+            connection->first_ans_bias_ = 0;
+            connection->answers_.pop();
         } else {
             // send operation would block
-            event_connection->first_ans_bias_ += wrote;
+            connection->first_ans_bias_ += wrote;
             return;
         }
     }

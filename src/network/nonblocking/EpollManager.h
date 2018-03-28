@@ -18,7 +18,7 @@ class EpollManager;
 class Connection {
 public:
 
-    explicit Connection(int descriptor) noexcept ;
+    explicit Connection(int descriptor = -1) noexcept ;
 
     virtual ssize_t WriteToStrict_NonBlock(const char *source, size_t len) noexcept ;
 
@@ -70,6 +70,23 @@ private:
     std::shared_ptr<Execute::Command> command_;
 };
 
+class ServerSocketConnection : public Connection {
+public:
+
+    explicit ServerSocketConnection(int server_socket) noexcept ;
+
+    int AcceptOn() noexcept ;
+
+private:
+
+    ssize_t WriteTo_NonBlock(const char *source, size_t len) noexcept override {};
+
+    ssize_t ReadFrom_NonBlock(char *dest, size_t len) noexcept override {};
+
+    void CloseConn() noexcept override {};
+
+};
+
 class SocketConnection : public Connection {
 
 public:
@@ -86,8 +103,6 @@ public:
 private:
     friend EpollManager;
 
-
-
 };
 
 class FifoConnection : public Connection {
@@ -101,7 +116,9 @@ public:
 
     FifoType type_;
 
-    FifoConnection(int fifo_fd, FifoConnection::FifoType type, int other_leg) noexcept ;
+    FifoConnection(const std::string& fifo_path, FifoConnection::FifoType type, int other_leg = -1) noexcept ;
+
+    void OpenConn() throw() ;
 
     ssize_t WriteTo_NonBlock(const char *source, size_t len) noexcept override ;
 
@@ -116,13 +133,15 @@ private:
     // write fifo leg for read fifo file
     int other_leg_;
 
+    std::string fifo_path_;
+
 };
 
 
 class EpollManager {
 public:
 
-    explicit EpollManager(int server_socket, int fifo_read_fd, int fifo_write_fd, Worker *worker) throw() ;
+    explicit EpollManager(int server_socket, const std::string& fifo_read_path, const std::string& fifo_write_path, Worker *worker) throw() ;
 
     ~EpollManager() noexcept ;
 
@@ -130,23 +149,23 @@ public:
 
     void WaitEvent() throw() ;
 
-    void AcceptEvent() throw() ;
+    void AcceptEvent(ServerSocketConnection *connection) throw() ;
 
-    void AddFifoPair(int fifo_read_fd, int fifo_write_fd) throw() ;
+    void AddFifoPair(const std::string& fifo_read_path, const std::string& fifo_write_path) throw() ;
 
-    void TerminateEvent(int descriptor) throw() ;
+    void TerminateEvent(Connection *connection) throw() ;
 
-    void TerminateServerEvent(int server_sock) throw() ;
+    void ReconnectEvent(Connection *connection) throw();
 
-    void ReadEvent(int socket) throw() ;
+    void ReadEvent(Connection *connection) throw() ;
 
-    void WriteEvent(int socket) noexcept ;
+    void WriteEvent(Connection *connection) noexcept ;
 
 private:
 
     static constexpr int max_events_{100};
 //    // -1 means infinity time of event waiting
-    static constexpr int max_timeout_{10000};
+    static constexpr int max_timeout_{-1};
 
     // Due no support in Ubuntu 16.04 (old epoll.h, but kernel support this flag)
     enum EPOLLFLAG {
@@ -161,8 +180,6 @@ private:
     struct epoll_event * events_;
     int epoll_fd_;
 
-    //TODO: Make implementation without this field
-    int server_socket_;
 };
 
 

@@ -46,7 +46,7 @@ public:
      * socket. Once connection accepted it must be registered and being processed
      * on this thread
      */
-    void Start(int server_socket, int fifo_read_fd = -1, int fifo_write_fd = -1) throw() ;
+    void Start(int server_socket, const std::string& fifo_read_path, const std::string& fifo_write_path) throw() ;
 
     /**
      * Signal background thread to stop. After that signal thread must stop to
@@ -68,7 +68,7 @@ protected:
     /**
      * Method executing by background thread
      */
-    void OnRun(int server_socket, int fifo_read_fd, int fifo_write_fd) noexcept ;
+    void OnRun(int server_socket, const std::string& fifo_read_path, const std::string& fifo_write_path) noexcept ;
 
 private:
     static void *RunOnRunProxy(void *proxy_args) noexcept ;
@@ -79,7 +79,7 @@ private:
     public:
         Worker *worker_;
         int socket_;
-        int fifo_read_fd_, fifo_write_fd_;
+        std::string fifo_read_path_, fifo_write_path_;
     };
 
     pthread_t thread_;
