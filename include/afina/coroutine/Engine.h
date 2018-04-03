@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
-#include <setjmp.h>
+#include <csetjmp>
 #include <tuple>
 
 namespace Afina {
@@ -29,10 +29,10 @@ private:
         char *Hight = nullptr;
 
         // coroutine stack copy buffer
-        std::tuple<char *, uint32_t> Stack = std::make_tuple(nullptr, 0);
+        std::tuple<char *, std::ptrdiff_t> Stack = std::make_tuple(nullptr, 0);
 
         // Saved coroutine context (registers)
-        jmp_buf Environment;
+        std::jmp_buf Environment;
 
         // To include routine in the different lists, such as "alive", "blocked", e.t.c
         struct context *prev = nullptr;
@@ -62,13 +62,14 @@ private:
 protected:
     /**
      * Save stack of the current coroutine in the given context
+     * Logically all calls of this function must be followed with setjmp call
      */
     void Store(context &ctx);
 
     /**
      * Restore stack of the given context and pass control to coroutinne
      */
-    void Restore(context &ctx);
+    [[noreturn]] void Restore(context &ctx);
 
     /**
      * Suspend current coroutine execution and execute given context
