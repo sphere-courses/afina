@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <unordered_set>
 
-#include "afina/Executor.h"
+#include <afina/Executor.h>
 #include <afina/network/Server.h>
 
 namespace Afina {

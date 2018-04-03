@@ -12,14 +12,20 @@
 #include <thread>
 #include <chrono>
 #include <ctime>
+#include <atomic>
 
 namespace Afina {
+
+// Forward declaration
+class Executor;
+
+bool initiate_thread(Executor *executor, void *(*function)(void *), bool use_lock);
+void * perform(void *executor_void);
+void delete_self(Executor *executor);
 
 /**
  * # Thread pool
  */
-
-void *perform(void *executor_void);
 
 class Executor {
 public:
@@ -35,13 +41,12 @@ public:
                 kStopped
     };
 
-    Executor() : workers_perf(0) {};
+    Executor() : workers_perf{0} {};
 
     ~Executor() = default;
 
-
-    void Start(size_t low_watermark = 3, size_t hight_watermark = 3, size_t max_queue_size = 5,
-               std::chrono::milliseconds idle_time = std::chrono::milliseconds(1000));
+    void Start(std::size_t low_watermark = 3, std::size_t hight_watermark = 3, std::size_t max_queue_size = 5,
+               std::chrono::milliseconds idle_time = std::chrono::milliseconds{1000});
 
     /**
      * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
@@ -66,19 +71,17 @@ public:
 
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
-        if (state.load() != State::kRun) {
+        if (state.load(std::memory_order_seq_cst) != State::kRun) {
             return false;
         }
 
         // Enqueue new task
-        std::unique_lock<std::mutex> lock(this->sh_res_mutex);
+        std::unique_lock<std::mutex> lock(sh_res_mutex);
         tasks.push_back(exec);
         if(workers_perf == threads.size() && threads.size() < hight_watermark){
             lock.unlock();
             if(!initiate_thread(this, perform, true)) {
                 Stop(true);
-                // No lock is need due to single thread
-                state = Executor::State::kStopped;
                 //TODO: throw error futher (make more error msgs)
                 return false;
             }
@@ -96,16 +99,18 @@ public:
 
     Executor &operator=(Executor &&) = delete;
 
-    friend void * Afina::perform(Executor *executor);
+private:
 
-    friend bool Afina::initiate_thread(Executor *executor, void *(*function)(void *), bool use_lock);
+    friend bool initiate_thread(Executor *executor, void *(*function)(void *), bool use_lock);
 
-    friend void * Afina::manage(void *executor_void);
+    friend void * perform(void *executor_void);
+
+    friend void delete_self(Executor *executor);
 
     /**
      * Mutex to protect state below from concurrent modification
-     */
-    std::mutex state_mutex, sh_res_mutex, mutex;
+    */
+    std::mutex sh_res_mutex;
 
     /**
      * Conditional variable to await new data in case of empty queue
@@ -130,7 +135,7 @@ public:
     std::atomic<State> state;
     //State state;
 
-    size_t low_watermark, hight_watermark, max_queue_size, workers_perf;
+    std::size_t low_watermark, hight_watermark, max_queue_size, workers_perf;
     std::chrono::milliseconds idle_time;
 };
 

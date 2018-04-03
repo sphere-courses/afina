@@ -9,13 +9,10 @@
 
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
-#include "../../executor/Executor.cpp"
-#include "../../protocol/Parser.h"
+#include <afina/Executor.h>
+#include <protocol/Parser.h>
 #include <sstream>
 
-
-
-using namespace Afina;
 
 namespace Afina {
 namespace Network {
@@ -42,7 +39,7 @@ void ServerImpl::Start(uint16_t port, uint16_t n_workers) {
     // variable value visibility
     max_workers = n_workers;
     listen_port = port;
-    executor.Start();//3, max_workers);
+    executor.Start();
 
     running.store(true);
 
@@ -52,6 +49,7 @@ void ServerImpl::Start(uint16_t port, uint16_t n_workers) {
 // See Server.h
 void ServerImpl::Stop() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
     running.store(false);
     shutdown(server_socket, SHUT_RDWR);
     executor.Stop(false);
@@ -60,6 +58,7 @@ void ServerImpl::Stop() {
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
     executor.Join();
 }
 
