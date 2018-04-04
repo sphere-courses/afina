@@ -3,6 +3,7 @@
 #include <iostream>
 #include <functional>
 #include <unordered_set>
+#include <pthread.h>
 
 
 namespace Afina {
@@ -29,7 +30,7 @@ bool initiate_thread(Executor *executor, void *(*function)(void *), bool use_loc
 void *perform(void *executor_void) {
     std::cout << "pool: " << __PRETTY_FUNCTION__ << std::endl;
 
-    Executor *executor = reinterpret_cast<Executor *>(executor_void);
+    auto executor = reinterpret_cast<Executor *>(executor_void);
     std::unique_lock<std::mutex> sh_res_lock(executor->sh_res_mutex);
     std::cv_status wait_res;
 
