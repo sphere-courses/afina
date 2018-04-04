@@ -3,6 +3,7 @@
 #include <csetjmp>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace Afina {
 namespace Coroutine {
@@ -10,13 +11,7 @@ namespace Coroutine {
 void Engine::Store(context &ctx) {
     volatile char curr_stack_ptr;
 
-    if(&curr_stack_ptr > StackBottom){
-        ctx.Low = StackBottom;
-        ctx.Hight = const_cast<char *>(&curr_stack_ptr);
-    } else {
-        ctx.Low = const_cast<char *>(&curr_stack_ptr);
-        ctx.Hight = StackBottom;
-    }
+    std::tie(ctx.Low, ctx.Hight) = std::minmax(const_cast<char *>(&curr_stack_ptr), StackBottom);
 
     std::ptrdiff_t curr_stack_size = ctx.Hight - ctx.Low;
 
