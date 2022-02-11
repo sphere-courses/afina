@@ -9,7 +9,7 @@
 
 #include "EpollManager.h"
 #include "Utils.h"
-
+// TODO: see Reactor
 
 namespace Afina {
 namespace Network {
@@ -476,7 +476,7 @@ void EpollManager::ReadEvent(Connection *connection) throw() {
         connection->state_ != Connection::State::BLOCKON_NONE) {
         throw std::runtime_error("Connection in inconsistent state");
     }
-
+    // TODO: some commands may not be read
     if (!worker_->running_.load()) {
         TerminateEvent(connection);
         return;
@@ -694,8 +694,11 @@ void EpollManager::WriteEvent(Connection *connection) noexcept {
 
     ssize_t wrote{0};
 
+    // TODO: Implement iovec
+    // TODO: Write only by epoll events
     while (!connection->answers_.empty()) {
         std::string &cur_ans = connection->answers_.front();
+        // TODO: move pointer
         wrote = connection->WriteToStrict_NonBlock(cur_ans.c_str(), cur_ans.length() - connection->first_ans_bias_);
         if (wrote == -1) {
             // Error occured in send call

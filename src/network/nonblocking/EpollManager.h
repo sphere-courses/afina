@@ -174,6 +174,7 @@ private:
 
     Worker *worker_;
 
+    // TODO: don`t use hash tables
     std::unordered_set<int> connections_fd_;
     std::unordered_map<int, Connection *> connections_;
 
